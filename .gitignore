@@ -1,0 +1,68 @@
+# --- General --- 
+# OS-generated files
+.DS_Store
+Thumbs.db
+._*
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Environment variables
+.env
+.env.*
+!/.env.example
+
+# Temporary files
+tmp/
+temp/
+
+# --- IDEs ---
+# JetBrains
+.idea/
+
+# VSCode
+.vscode/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# --- Build & Dependency Artifacts ---
+# General
+bin/
+build/
+dist/
+
+# Go
+*.test
+*.out
+coverage.html
+vendor/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+*.env
+
+# --- Local Configurations ---
+# Docker
+.docker/
+
+# Kubernetes
+kubeconfig
+*.kubeconfig

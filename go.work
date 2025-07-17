@@ -1,0 +1,9 @@
+go 1.24.5
+
+use (
+    ./services/order
+    ./services/payment
+    ./services/inventory
+    ./services/api-gateway
+    ./shared/libs
+)
