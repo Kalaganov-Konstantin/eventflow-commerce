@@ -40,8 +40,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-go
-      - name: Run tests
-        run: go test -v -race -cover ./...
+      - name: Run tests on all modules
+        run: |
+          # Programmatically find all modules in go.work and test them
+          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
+            # Check if there are any .go files in the module directory
+            if find "$mod" -maxdepth 1 -name '*.go' | read; then
+              echo "Running tests for $mod..."
+              (cd "$mod" && go test -v -race -cover ./...)
+            else
+              echo "Skipping $mod (no .go files found)."
+            fi
+          done
 
   security-scan:
     name: Vulnerability Scan
