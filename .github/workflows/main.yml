@@ -22,11 +22,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Run linters
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          args: --timeout=5m
+          cache-dependency-path: go.work
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - name: Run linters on all modules
+        run: |
+          # Programmatically find all modules in go.work and lint them
+          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
+            echo "Linting $mod..."
+            (cd "$mod" && golangci-lint run --timeout=5m)
+          done
 
   test:
     name: Test
@@ -37,6 +44,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.work
       - name: Run tests
         run: go test -v -race -cover ./...
 
@@ -48,6 +56,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.work
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y jq
