@@ -9,7 +9,7 @@ We need to build a scalable e-commerce system that can handle complex business l
 ## Decision
 We will use a microservices architecture with the following services:
 - Order Service (Go)
-- Payment Service (Go) 
+- Payment Service (Go)
 - Inventory Service (Go)
 - Notification Service (Python)
 - API Gateway (Go)

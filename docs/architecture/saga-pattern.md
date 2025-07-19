@@ -30,7 +30,7 @@ sequenceDiagram
     end
 
     OS->>OS: Save Order (PENDING_PAYMENT)
-    
+
     Note over OS, K: Async Saga (Choreography) Begins
     OS->>K: Publish OrderReadyForPayment
     OS-->>GW: Order ID

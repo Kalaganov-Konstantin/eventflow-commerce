@@ -11,11 +11,11 @@ graph LR
         CMD2[Refund Payment]
         CMD3[Cancel Payment]
     end
-    
+
     subgraph "Payment Aggregate"
         PA[Payment<br/>- ID<br/>- Amount<br/>- Status<br/>- Version]
     end
-    
+
     subgraph "Events"
         E1[PaymentInitiated]
         E2[PaymentProcessed]
@@ -23,37 +23,37 @@ graph LR
         E4[PaymentRefunded]
         E5[PaymentCancelled]
     end
-    
+
     subgraph "Event Store"
         ES[(Event Store<br/>PostgreSQL)]
     end
-    
+
     subgraph "Read Models"
         RM1[Payment Status View]
         RM2[Daily Revenue View]
         RM3[Failed Payments View]
     end
-    
+
     CMD1 --> PA
     CMD2 --> PA
     CMD3 --> PA
-    
+
     PA --> E1
     PA --> E2
     PA --> E3
     PA --> E4
     PA --> E5
-    
+
     E1 --> ES
     E2 --> ES
     E3 --> ES
     E4 --> ES
     E5 --> ES
-    
+
     ES --> RM1
     ES --> RM2
     ES --> RM3
-    
+
     style ES fill:#f96,stroke:#333,stroke-width:2px
 ```
 

@@ -14,7 +14,7 @@ graph TB
         subgraph DataPlane ["Data Plane"]
             direction TB
             IIG["Istio Ingress Gateway"]
-            
+
             subgraph DeploymentsGroup ["Your Services (with Istio sidecars)"]
                 direction LR
                 GW["API Gateway"]

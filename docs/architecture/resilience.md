@@ -13,18 +13,18 @@ graph TB
         OPEN[Open<br/>All requests fail fast]
         HALF[Half-Open<br/>Limited requests]
     end
-    
+
     subgraph "Metrics"
         SUCC[Success Count]
         FAIL[Failure Count]
         TIMEOUT[Timeout Count]
     end
-    
+
     CLOSED -->|Failure Threshold| OPEN
     OPEN -->|After Timeout| HALF
     HALF -->|Success| CLOSED
     HALF -->|Failure| OPEN
-    
+
     style CLOSED fill:#9f9,stroke:#333,stroke-width:2px
     style OPEN fill:#f99,stroke:#333,stroke-width:2px
     style HALF fill:#ff9,stroke:#333,stroke-width:2px

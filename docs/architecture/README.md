@@ -1,6 +1,6 @@
 # Architecture Documentation
 
-This directory contains detailed documentation on the architectural patterns and decisions that power EventFlow Commerce. 
+This directory contains detailed documentation on the architectural patterns and decisions that power EventFlow Commerce.
 
 For a high-level overview, please see the main [README.md](../README.md).
 
