@@ -1,0 +1,24 @@
+[project]
+name = "notification"
+version = "0.1.0"
+description = "EventFlow Commerce Notification Service"
+authors = [
+    {name = "Kalaganov-Konstantin", email = "kalaganov.konstant@gmail.com"}
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[all] (>=0.116.1,<0.117.0)",
+    "prometheus-client (>=0.22.1,<0.23.0)"
+]
+
+[tool.poetry]
+packages = [{include = "notification"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+black = "^25.1.0"
+ruff = "^0.12.4"
+pytest = "^8.4.1"

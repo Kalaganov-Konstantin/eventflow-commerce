@@ -4,7 +4,6 @@ import uvicorn
 
 app = FastAPI(title="Notification Service")
 
-# Add prometheus metrics endpoint
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
 
