@@ -35,7 +35,7 @@ test: test-go test-python ## 🧪 Run all unit tests
 lint-go: ## (internal) Run Go linters with auto-fix (for pre-commit)
 	@echo "--> Linting Go modules (local mode with --fix)..."
 	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
-		if find "$$mod" -name "*.go" | head -1 | read; then \
+		if [ -n "$$(find "$$mod" -name "*.go" -print -quit)" ]; then \
 			echo "Linting $$mod..."; \
 			(cd "$$mod" && golangci-lint run --fix); \
 		else \
@@ -47,7 +47,7 @@ lint-go: ## (internal) Run Go linters with auto-fix (for pre-commit)
 lint-go-ci: ## (internal) Run Go linters without auto-fix (for CI)
 	@echo "--> Linting Go modules (CI mode)..."
 	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
-		if find "$$mod" -name "*.go" | head -1 | read; then \
+		if [ -n "$$(find "$$mod" -name "*.go" -print -quit)" ]; then \
 			echo "Linting $$mod..."; \
 			(cd "$$mod" && golangci-lint run --timeout=5m); \
 		else \
@@ -66,7 +66,7 @@ lint-python: ## (internal) Run Python linters
 test-go: ## (internal) Run Go unit tests for all modules
 	@echo "--> Running Go unit tests..."
 	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
-		if find "$$mod" -name "*_test.go" | head -1 | read; then \
+		if [ -n "$$(find "$$mod" -name "*_test.go" -print -quit)" ]; then \
 			echo "Testing $$mod..."; \
 			(cd "$$mod" && go test -v -race -cover ./...); \
 		else \
