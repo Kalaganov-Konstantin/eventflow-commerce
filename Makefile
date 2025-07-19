@@ -15,7 +15,7 @@ setup: ## 📦 Install all project dependencies
 	@go mod download
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	@echo "--> Installing Python dependencies for the 'notification' service..."
-	@cd services/notification && poetry install
+	@cd services/notification && uv sync --locked --all-extras --dev
 
 .PHONY: lint
 lint: lint-go-ci lint-python ## 🔍 Run all linters (CI version)
@@ -58,8 +58,8 @@ lint-go-ci: ## (internal) Run Go linters without auto-fix (for CI)
 .PHONY: lint-python
 lint-python: ## (internal) Run Python linters
 	@echo "--> Linting 'notification' service (ruff and black)..."
-	@cd services/notification && poetry run ruff check .
-	@cd services/notification && poetry run black --check .
+	@cd services/notification && uv run ruff check .
+	@cd services/notification && uv run black --check .
 
 # --- Testing ---
 .PHONY: test-go
@@ -77,4 +77,4 @@ test-go: ## (internal) Run Go unit tests for all modules
 .PHONY: test-python
 test-python: ## (internal) Run Python unit tests
 	@echo "--> Running Python unit tests for 'notification' service..."
-	@cd services/notification && poetry run pytest
+	@cd services/notification && uv run pytest

@@ -25,13 +25,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - uses: ./.github/actions/setup-go
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.2
+          version: "0.8.0"
+          enable-cache: true
       - name: Install dependencies
         run: make setup
       - name: Run linters
@@ -47,13 +45,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - uses: ./.github/actions/setup-go
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.2
+          version: "0.8.0"
+          enable-cache: true
       - name: Install dependencies
         run: make setup
       - name: Run tests
