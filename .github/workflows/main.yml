@@ -12,6 +12,8 @@ permissions:
 
 env:
   GO_VERSION: '1.24'
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
 
 jobs:
   lint:
@@ -19,19 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - uses: ./.github/actions/setup-go
-      - name: Run linters on all modules
-        run: |
-          # Programmatically find all modules in go.work and lint them
-          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            # Check if there are any .go files in the module directory (including subdirs)
-            if find "$mod" -name '*.go' | head -1 | read; then
-              echo "Linting $mod..."
-              (cd "$mod" && golangci-lint run --timeout=5m)
-            else
-              echo "Skipping $mod (no .go files found)."
-            fi
-          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'poetry'
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.2
+      - name: Install dependencies
+        run: make setup
+      - name: Run linters
+        run: make lint
 
   test:
     name: Test
@@ -39,19 +44,35 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - uses: ./.github/actions/setup-go
-      - name: Run tests on all modules
-        run: |
-          # Programmatically find all modules in go.work and test them
-          for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            # Check if there are any .go files in the module directory
-            if find "$mod" -maxdepth 1 -name '*.go' | read; then
-              echo "Running tests for $mod..."
-              (cd "$mod" && go test -v -race -cover ./...)
-            else
-              echo "Skipping $mod (no .go files found)."
-            fi
-          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'poetry'
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.2
+      - name: Install dependencies
+        run: make setup
+      - name: Run tests
+        run: make test
+
+  pre-commit-check:
+    name: Pre-commit Hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pre-commit
+        run: pip install pre-commit
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files
 
   security-scan:
     name: Vulnerability Scan
@@ -62,28 +83,12 @@ jobs:
       - uses: ./.github/actions/setup-go
       - name: Run govulncheck on all modules
         run: |
-          # Programmatically find all modules in go.work and scan them
+          # This logic remains here as it's CI-specific and not part of the local dev loop.
           for mod in $(go work edit -json | jq -r '.Use[].DiskPath'); do
-            echo "Scanning $mod for vulnerabilities..."
-            (cd "$mod" && govulncheck ./...)
+            if find "$mod" -name '*.go' | head -1 | read; then
+              echo "Scanning $mod for vulnerabilities..."
+              (cd "$mod" && govulncheck ./...)
+            else
+              echo "Skipping $mod (no .go files found)."
+            fi
           done
-
-  python-lint:
-    name: Python Lint (Notification Service)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      - name: Install dependencies
-        run: |
-          cd services/notification
-          pip install -r requirements.txt
-          pip install ruff black
-      - name: Run ruff
-        run: cd services/notification && ruff check .
-      - name: Run black
-        run: cd services/notification && black --check .
-
