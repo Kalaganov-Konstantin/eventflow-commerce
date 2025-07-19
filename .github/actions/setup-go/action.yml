@@ -15,10 +15,8 @@ runs:
           sudo apt-get update && sudo apt-get install -y jq
         fi
     - name: Install golangci-lint
-      uses: golangci/golangci-lint-action@v6
-      with:
-        version: v1.62.2
-        install-mode: goinstall
+      shell: bash
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.2
     - name: Install govulncheck
       shell: bash
       run: go install golang.org/x/vuln/cmd/govulncheck@latest
