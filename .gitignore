@@ -21,6 +21,7 @@ temp/
 # --- IDEs ---
 # JetBrains
 .idea/
+*.iml
 
 # VSCode
 .vscode/

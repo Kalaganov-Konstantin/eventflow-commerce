@@ -1,0 +1,67 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build artifacts
+target/
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+*.cover
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Infrastructure
+infrastructure/
+k8s/
+helm/
+terraform/
+
+# Scripts
+scripts/
+
+# Tests
+tests/
+*_test.go
+test_*.py
+**/tests/
+
+# Development tools
+Makefile

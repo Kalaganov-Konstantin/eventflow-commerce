@@ -78,3 +78,41 @@ test-go: ## (internal) Run Go unit tests for all modules
 test-python: ## (internal) Run Python unit tests
 	@echo "--> Running Python unit tests for 'notification' service..."
 	@cd services/notification && uv run pytest
+
+# =============================================================================
+# DOCKER COMMANDS
+# =============================================================================
+
+.PHONY: docker-build
+docker-build: ## 🐳 Build all Docker images
+	@echo "--> Building all Docker images..."
+	@docker-compose build
+
+.PHONY: docker-up
+docker-up: ## 🚀 Start all services with Docker Compose
+	@echo "--> Starting all services..."
+	@docker-compose up -d
+
+.PHONY: docker-down
+docker-down: ## 🛑 Stop all services
+	@echo "--> Stopping all services..."
+	@docker-compose down
+
+.PHONY: docker-logs
+docker-logs: ## 📋 Show logs from all services
+	@docker-compose logs -f
+
+.PHONY: docker-clean
+docker-clean: ## 🧹 Clean Docker images and containers
+	@echo "--> Cleaning Docker resources..."
+	@docker-compose down -v
+	@docker system prune -f
+	@docker volume prune -f
+
+.PHONY: demo
+demo: docker-build docker-up ## 🎯 Full demo: build and start all services
+	@echo "✅ EventFlow Commerce is running!"
+	@echo "🌐 API Gateway: http://localhost:8080"
+	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
+	@echo "🔍 Jaeger: http://localhost:16686"
+	@echo "📈 Prometheus: http://localhost:9090"
