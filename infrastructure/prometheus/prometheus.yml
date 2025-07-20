@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # EventFlow Commerce services
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:8081']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'payment-service'
+    static_configs:
+      - targets: ['payment-service:8082']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'inventory-service'
+    static_configs:
+      - targets: ['inventory-service:8083']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification-service:8084']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Infrastructure monitoring
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 60s
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 60s
