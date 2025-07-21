@@ -49,10 +49,11 @@ docker-compose*.yml
 .dockerignore
 
 # Infrastructure
-infrastructure/
-k8s/
-helm/
-terraform/
+infrastructure/grafana/
+infrastructure/prometheus/
+infrastructure/helm/
+infrastructure/k8s/
+infrastructure/terraform/
 
 # Scripts
 scripts/
@@ -65,3 +66,7 @@ test_*.py
 
 # Development tools
 Makefile
+
+# Exclude other services from builds (will be overridden during specific service builds)
+!services/*/
+!shared/
