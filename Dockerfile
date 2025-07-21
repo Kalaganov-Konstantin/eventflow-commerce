@@ -2,27 +2,27 @@
 FROM golang:1.24.5-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata wget
+RUN apk add --no-cache git ca-certificates tzdata
 
+ARG SERVICE_NAME
 WORKDIR /app
 
-# Copy dependency files
-COPY go.mod go.sum ./
-
-# Download dependencies
-RUN go mod download
-
-# Copy service source
+# Copy entire project (filtered by .dockerignore)
 COPY . .
 
-# Build the application
+# Build the specified service
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags='-w -s -extldflags "-static"' \
     -a -installsuffix cgo \
-    -o main cmd/server/main.go
+    -o main ./services/${SERVICE_NAME}/cmd/server
+
+
 
 # Runtime stage
-FROM scratch
+FROM alpine:latest
+
+# Install curl for health checks and update package index
+RUN apk update && apk upgrade && apk add --no-cache curl ca-certificates tzdata
 
 # Copy timezone data and certificates from builder
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
@@ -32,11 +32,15 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /app/main /main
 
 # Expose port
-EXPOSE 8080
+ARG PORT
+EXPOSE ${PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD [ "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health" ]
+  CMD [ "curl", "-f", "http://localhost:${PORT}/health" ]
+
+# Set environment variable for the application
+ENV PORT=${PORT}
 
 # Run the binary
 ENTRYPOINT ["/main"]
