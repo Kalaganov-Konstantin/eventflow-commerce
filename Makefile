@@ -1,4 +1,4 @@
-include .env
+-include .env
 
 .PHONY: help
 help: ## ✨ Show this help message
