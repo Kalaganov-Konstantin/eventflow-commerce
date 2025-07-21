@@ -9,6 +9,8 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi[all]>=0.116.1",
     "prometheus-client>=0.22.1",
+    "psycopg2-binary>=2.9.10",
+    "yoyo-migrations>=9.0.0",
 ]
 
 [project.optional-dependencies]
