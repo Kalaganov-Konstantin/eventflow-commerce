@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 import uvicorn
 
+from .config.config import load_config
+
 app = FastAPI(title="Notification Service")
 
 metrics_app = make_asgi_app()
@@ -19,4 +21,6 @@ async def root():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8084)
+    config = load_config()
+    print(f"Starting Notification service on {config.server.host}:{config.server.port}")
+    uvicorn.run(app, host=config.server.host, port=config.server.port)

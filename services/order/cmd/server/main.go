@@ -5,11 +5,17 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
 	fmt.Println("Starting Order service...")
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -17,5 +23,8 @@ func main() {
 	})
 
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(":8081", nil))
+
+	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
+	fmt.Printf("Server starting on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
