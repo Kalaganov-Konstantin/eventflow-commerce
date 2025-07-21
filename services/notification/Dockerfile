@@ -2,43 +2,51 @@
 FROM python:3.12-slim AS builder
 
 # Install uv
-RUN pip install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
+# Set working directory
 WORKDIR /app
 
-# Copy dependency files
-COPY pyproject.toml uv.lock ./
+# Copy Python project files
+COPY services/notification/pyproject.toml services/notification/uv.lock ./
 
 # Install dependencies
-RUN uv sync --locked --no-dev
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+RUN uv sync --frozen --no-dev
+
+# Copy source code
+COPY services/notification/ ./
 
 # Runtime stage
 FROM python:3.12-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y     ca-certificates     && rm -rf /var/lib/apt/lists/*     && apt-get clean
-
-WORKDIR /app
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application code
-COPY notification/ ./notification/
+# Copy source code
+COPY --from=builder /app/notification /app/notification
+COPY --from=builder /app/migrations /app/migrations
 
-# Add virtual environment to PATH
+# Set working directory
+WORKDIR /app
+
+# Add virtual environment to path
 ENV PATH="/app/.venv/bin:$PATH"
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app
-USER appuser
+ENV PYTHONPATH="/app/.venv/lib/python3.12/site-packages:$PYTHONPATH"
 
 # Expose port
-EXPOSE 8084
+ARG PORT=8000
+EXPOSE ${PORT}
+
+# Set environment variable for the application
+ENV PORT=${PORT}
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3     CMD python -c "import requests; requests.get('http://localhost:8084/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["curl", "-f", "http://localhost:${PORT}/health"]
 
 # Run the application
 CMD ["python", "-m", "notification.main"]

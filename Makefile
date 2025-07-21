@@ -1,3 +1,5 @@
+include .env
+
 .PHONY: help
 help: ## ✨ Show this help message
 	@echo 'Usage: make [target]'
@@ -25,10 +27,35 @@ lint: lint-go-ci lint-python ## 🔍 Run all linters (CI version)
 test: test-go test-python ## 🧪 Run all unit tests
 	@echo "✅ All tests passed successfully."
 
+.PHONY: migrate
+migrate: migrate-order migrate-payment migrate-inventory migrate-notification ## 🚀 Run all database migrations
+	@echo "✅ All migrations applied successfully."
+
 
 # =============================================================================
 # INTERNAL TARGETS (for local development and CI)
 # =============================================================================
+
+# --- Migrations ---
+.PHONY: migrate-order
+migrate-order: ## (internal) Run database migrations for the order service
+	@echo "--> Running migrations for 'order' service..."
+	@docker-compose run --rm order-migrate
+
+.PHONY: migrate-payment
+migrate-payment: ## (internal) Run database migrations for the payment service
+	@echo "--> Running migrations for 'payment' service..."
+	@docker-compose run --rm payment-migrate
+
+.PHONY: migrate-inventory
+migrate-inventory: ## (internal) Run database migrations for the inventory service
+	@echo "--> Running migrations for 'inventory' service..."
+	@docker-compose run --rm inventory-migrate
+
+.PHONY: migrate-notification
+migrate-notification: ## (internal) Run database migrations for the notification service
+	@echo "--> Running migrations for 'notification' service..."
+	@docker-compose run --rm notification-migrate
 
 # --- Linting ---
 .PHONY: lint-go
@@ -109,10 +136,12 @@ docker-clean: ## 🧹 Clean Docker images and containers
 	@docker system prune -f
 	@docker volume prune -f
 
+
 .PHONY: demo
 demo: docker-build docker-up ## 🎯 Full demo: build and start all services
 	@echo "✅ EventFlow Commerce is running!"
-	@echo "🌐 API Gateway: http://localhost:8080"
-	@echo "📊 Grafana: http://localhost:3000 (admin/admin)"
-	@echo "🔍 Jaeger: http://localhost:16686"
-	@echo "📈 Prometheus: http://localhost:9090"
+	@echo "🌐 API Gateway: http://localhost:${API_GATEWAY_PORT}"
+	@echo "📊 Grafana: http://localhost:${GRAFANA_PORT} (admin/admin)"
+	@echo "🔍 Jaeger: http://localhost:${JAEGER_UI_PORT}"
+	@echo "📈 Prometheus: http://localhost:${PROMETHEUS_PORT}"
+	@echo "⚙️ Kafka UI: http://localhost:${KAFKA_UI_PORT}"
