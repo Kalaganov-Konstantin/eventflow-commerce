@@ -6,9 +6,13 @@
 
 ## ✨ Project Overview
 
-**EventFlow Commerce** is a fully-featured, distributed e-commerce platform built to showcase a modern, cloud-native architecture. It serves as a practical, hands-on demonstration of how to design, build, and operate a complex, resilient, and scalable system using cutting-edge, production-ready technologies.
+**EventFlow Commerce** is a fully-featured, distributed e-commerce platform built to showcase a modern, cloud-native
+architecture. It serves as a practical, hands-on demonstration of how to design, build, and operate a complex,
+resilient, and scalable system using cutting-edge, production-ready technologies.
 
-This project is not just about code; it's a comprehensive portfolio piece that illustrates advanced concepts in microservices, event-driven design, and DevOps. It's designed to be a reference for engineers and a testament to the skills required to build robust, enterprise-grade applications.
+This project is not just about code; it's a comprehensive portfolio piece that illustrates advanced concepts in
+microservices, event-driven design, and DevOps. It's designed to be a reference for engineers and a testament to the
+skills required to build robust, enterprise-grade applications.
 
 ## 🚀 Key Features
 
@@ -23,15 +27,15 @@ This project is not just about code; it's a comprehensive portfolio piece that i
 
 ## 🛠️ Technology Stack
 
-| Category | Technology |
-| :--- | :--- |
-| **Languages** | [Go](https://golang.org/), [Python](https://www.python.org/) |
-| **Service Mesh** | [Istio](https://istio.io/) |
-| **Event Bus** | [Apache Kafka](https://kafka.apache.org/) |
-| **Databases** | [PostgreSQL](https://www.postgresql.org/), [Redis](https://redis.io/) |
-| **Containerization**| [Docker](https://www.docker.com/), [Kubernetes](https://kubernetes.io/) |
-| **Observability** | [Prometheus](https://prometheus.io/), [Grafana](https://grafana.com/), [Jaeger](https://www.jaegertracing.io/), ELK Stack |
-| **CI/CD** | [GitHub Actions](https://github.com/features/actions) |
+| Category             | Technology                                                                                                                |
+|:---------------------|:--------------------------------------------------------------------------------------------------------------------------|
+| **Languages**        | [Go](https://golang.org/), [Python](https://www.python.org/)                                                              |
+| **Service Mesh**     | [Istio](https://istio.io/)                                                                                                |
+| **Event Bus**        | [Apache Kafka](https://kafka.apache.org/)                                                                                 |
+| **Databases**        | [PostgreSQL](https://www.postgresql.org/), [Redis](https://redis.io/)                                                     |
+| **Containerization** | [Docker](https://www.docker.com/), [Kubernetes](https://kubernetes.io/)                                                   |
+| **Observability**    | [Prometheus](https://prometheus.io/), [Grafana](https://grafana.com/), [Jaeger](https://www.jaegertracing.io/), ELK Stack |
+| **CI/CD**            | [GitHub Actions](https://github.com/features/actions)                                                                     |
 
 ## ⚡ Quick Start
 
@@ -49,10 +53,9 @@ make demo
 
 ## 🏗️ Architecture
 
-The architecture of EventFlow Commerce is designed to be scalable, resilient, and maintainable. Below is a high-level overview. For a more detailed exploration of our architectural patterns, ADRs, and diagrams, please see our **[Architecture Documentation](./docs/architecture/README.md)**.
-
-<details>
-<summary>Show/Hide: High-Level Overview</summary>
+The architecture of EventFlow Commerce is designed to be scalable, resilient, and maintainable. Below is a high-level
+overview. For a more detailed exploration of our architectural patterns, ADRs, and diagrams, please see our *
+*[Architecture Documentation](./docs/architecture/README.md)**.
 
 ```mermaid
 graph LR
@@ -83,18 +86,16 @@ graph LR
     GW --> OS
     GW --> PS
     GW --> IS
-
-    Services -- "Events" --> KAFKA
-    Services -- "Logs, Metrics, Traces" --> OBS
+    Services -- " Events " --> KAFKA
+    Services -- " Logs, Metrics, Traces " --> OBS
 ```
-
-</details>
 
 ## 📚 Documentation
 
 For full project documentation, please see the `/docs` directory:
 
-- **[Architecture Deep Dive](./docs/architecture/README.md)**: A detailed look at all architectural patterns and diagrams.
+- **[Architecture Deep Dive](./docs/architecture/README.md)**: A detailed look at all architectural patterns and
+  diagrams.
 - **[API Reference](./docs/api/README.md)**: OpenAPI specifications for our services.
 - **[Developer Guides](./docs/guides/)**: Instructions for development, deployment, and more.
 
