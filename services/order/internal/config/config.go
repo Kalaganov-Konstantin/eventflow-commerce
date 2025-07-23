@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 )
 
 type Config struct {

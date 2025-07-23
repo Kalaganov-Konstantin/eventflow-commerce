@@ -8,7 +8,7 @@
 [![Order Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)
 [![Payment Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)
 [![Inventory Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)
-[![Shared Libs](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs)
+[![Shared Libs](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go)
 
 ## ✨ Project Overview
 

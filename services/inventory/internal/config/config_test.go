@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 )
 
 func TestLoadConfig(t *testing.T) {

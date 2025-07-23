@@ -2,10 +2,10 @@ module github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment
 
 go 1.24.5
 
-replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs => ../../shared/libs
+replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go => ../../shared/libs/go
 
 require (
-	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs v0.0.0-00010101000000-000000000000
+	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.22.0
 )
 

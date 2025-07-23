@@ -9,7 +9,7 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/handler"
-	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/config"
+	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 	"go.uber.org/zap/zaptest"
 )
 

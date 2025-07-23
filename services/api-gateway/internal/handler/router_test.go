@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
-	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/config"
+	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 	"go.uber.org/zap"
 )
 

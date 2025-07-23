@@ -3,7 +3,7 @@ module github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway
 go 1.24.5
 
 require (
-	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs v0.0.0-20250722180430-e8b1d0e2cf02
+	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go v0.0.0-20250722180430-e8b1d0e2cf02
 	github.com/golang-jwt/jwt/v5 v5.2.3
 	github.com/prometheus/client_golang v1.22.0
 	go.uber.org/zap v1.27.0
@@ -34,4 +34,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs => ../../shared/libs
+replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go => ../../shared/libs/go

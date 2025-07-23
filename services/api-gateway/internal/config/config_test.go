@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/config"
+	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 )
 
 func TestValidate(t *testing.T) {
