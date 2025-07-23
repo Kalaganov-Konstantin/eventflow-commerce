@@ -140,17 +140,23 @@ test-python: ## (internal) Run Python unit tests
 test-go-coverage: ## (internal) Run Go unit tests with coverage
 	@echo "--> Running Go unit tests with coverage..."
 	@echo "mode: atomic" > coverage.out
-	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
+	@ROOT_DIR=$$(pwd); \
+	for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
 		if [ -n "$$(find "$$mod" -name "*_test.go" -print -quit)" ]; then \
 			echo "Testing $$mod with coverage..."; \
 			(cd "$$mod" && go test -v -race -coverprofile=coverage.tmp -covermode=atomic ./... && \
 			if [ -f coverage.tmp ]; then \
-				tail -n +2 coverage.tmp >> ../../../coverage.out && rm coverage.tmp; \
+				tail -n +2 coverage.tmp >> "$$ROOT_DIR/coverage.out" && rm coverage.tmp; \
 			fi) || exit 1; \
 		else \
 			echo "Skipping $$mod (no tests found)."; \
 		fi; \
 	done
+	@if [ ! -s coverage.out ]; then \
+		echo "Warning: Go coverage file is empty or missing"; \
+	else \
+		echo "✅ Go coverage file generated with $$(wc -l < coverage.out) lines"; \
+	fi
 
 .PHONY: test-python-coverage
 test-python-coverage: ## (internal) Run Python unit tests with coverage
