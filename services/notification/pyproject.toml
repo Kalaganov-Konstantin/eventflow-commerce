@@ -10,6 +10,8 @@ dependencies = [
     "fastapi[all]>=0.116.1",
     "prometheus-client>=0.22.1",
     "psycopg2-binary>=2.9.10",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
     "yoyo-migrations>=9.0.0",
 ]
 
