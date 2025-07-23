@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -10,10 +10,11 @@ class ServerConfig(BaseModel):
 class Config(BaseSettings):
     server: ServerConfig
 
-    class Config:
-        env_prefix = "NOTIFICATION_"
-        env_nested_delimiter = "_"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_prefix="NOTIFICATION_",
+        env_nested_delimiter="_",
+        case_sensitive=False,
+    )
 
 
 def load_config() -> Config:
