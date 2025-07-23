@@ -30,3 +30,14 @@ type KafkaConfig struct {
 type JaegerConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 }
+
+type ServiceConfig struct {
+	Name    string `mapstructure:"name"`
+	Version string `mapstructure:"version"`
+}
+
+type LoggerConfig struct {
+	Level       string   `mapstructure:"level"`
+	Environment string   `mapstructure:"environment"`
+	OutputPaths []string `mapstructure:"output_paths"`
+}
