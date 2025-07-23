@@ -1,0 +1,77 @@
+codecov:
+  require_ci_to_pass: yes
+  notify:
+    wait_for_ci: yes
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 1%
+        if_ci_failed: error
+    patch:
+      default:
+        target: 70%
+        threshold: 1%
+
+# Configure for monorepo with multiple languages
+flags:
+  # Go services
+  api-gateway:
+    paths:
+      - services/api-gateway/
+    carryforward: false
+
+  inventory:
+    paths:
+      - services/inventory/
+    carryforward: false
+
+  order:
+    paths:
+      - services/order/
+    carryforward: false
+
+  payment:
+    paths:
+      - services/payment/
+    carryforward: false
+
+  shared-libs:
+    paths:
+      - shared/libs/
+    carryforward: false
+
+  # Python services
+  notification:
+    paths:
+      - services/notification/
+    carryforward: false
+
+# Ignore files that shouldn't be counted in coverage
+ignore:
+  - "**/*_test.go"
+  - "**/test_*.py"
+  - "**/tests/**"
+  - "**/__pycache__/**"
+  - "**/vendor/**"
+  - "**/node_modules/**"
+  - "**/*.pb.go"
+  - "**/*.proto"
+  - "**/docs/**"
+  - "**/*.md"
+  - "**/Dockerfile*"
+  - "**/*.yml"
+  - "**/*.yaml"
+  - "**/docker-compose*"
+  - "**/Makefile"
+
+comment:
+  layout: "reach,diff,flags,tree,reach"
+  behavior: default
+  require_changes: false
