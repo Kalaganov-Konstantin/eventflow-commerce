@@ -2,7 +2,13 @@
 
 [![CI/CD](https://github.com/Kalaganov-Konstantin/eventflow-commerce/actions/workflows/main.yml/badge.svg)](https://github.com/Kalaganov-Konstantin/eventflow-commerce/actions/workflows/main.yml)
 [![codecov](https://codecov.io/gh/Kalaganov-Konstantin/eventflow-commerce/branch/main/graph/badge.svg)](https://codecov.io/gh/Kalaganov-Konstantin/eventflow-commerce)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce)
+
+**Go Report Cards:**
+[![API Gateway](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway)
+[![Order Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)
+[![Payment Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)
+[![Inventory Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)
+[![Shared Libs](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs)
 
 ## ✨ Project Overview
 
