@@ -49,11 +49,7 @@ docker-compose*.yml
 .dockerignore
 
 # Infrastructure
-infrastructure/grafana/
-infrastructure/prometheus/
-infrastructure/helm/
-infrastructure/k8s/
-infrastructure/terraform/
+infrastructure/
 
 # Scripts
 scripts/
@@ -63,6 +59,7 @@ tests/
 *_test.go
 test_*.py
 **/tests/
+**/migrations/
 
 # Development tools
 Makefile

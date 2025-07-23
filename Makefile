@@ -16,12 +16,17 @@ setup: ## 📦 Install all project dependencies
 	@echo "--> Installing Go dependencies..."
 	@go mod download
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@go install golang.org/x/tools/cmd/goimports@latest
 	@echo "--> Installing Python dependencies for the 'notification' service..."
 	@cd services/notification && uv sync --locked --all-extras --dev
 
 .PHONY: lint
 lint: lint-go-ci lint-python ## 🔍 Run all linters (CI version)
 	@echo "✅ All linters passed successfully."
+
+.PHONY: fmt
+fmt: fmt-go fmt-python ## 🎨 Format all code (Go + Python)
+	@echo "✅ All code formatted successfully."
 
 .PHONY: test
 test: test-go test-python ## 🧪 Run all unit tests
@@ -76,7 +81,7 @@ lint-go-ci: ## (internal) Run Go linters without auto-fix (for CI)
 	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
 		if [ -n "$$(find "$$mod" -name "*.go" -print -quit)" ]; then \
 			echo "Linting $$mod..."; \
-			(cd "$$mod" && golangci-lint run --timeout=5m); \
+			(cd "$$mod" && golangci-lint run --timeout=5m) || exit 1; \
 		else \
 			echo "Skipping $$mod (no .go files found)."; \
 		fi; \
@@ -88,6 +93,26 @@ lint-python: ## (internal) Run Python linters
 	@cd services/notification && uv run ruff check .
 	@cd services/notification && uv run black --check .
 
+# --- Formatting ---
+.PHONY: fmt-go
+fmt-go: ## (internal) Format Go code with gofmt and goimports
+	@echo "--> Formatting Go code..."
+	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
+		if [ -n "$$(find "$$mod" -name "*.go" -print -quit)" ]; then \
+			echo "Formatting $$mod..."; \
+			find "$$mod" -name "*.go" -exec gofmt -s -w {} \;; \
+			find "$$mod" -name "*.go" -exec goimports -w {} \;; \
+		else \
+			echo "Skipping $$mod (no .go files found)."; \
+		fi; \
+	done
+
+.PHONY: fmt-python
+fmt-python: ## (internal) Format Python code with black and ruff
+	@echo "--> Formatting 'notification' service (black and ruff)..."
+	@cd services/notification && uv run black .
+	@cd services/notification && uv run ruff check --fix .
+
 # --- Testing ---
 .PHONY: test-go
 test-go: ## (internal) Run Go unit tests for all modules
@@ -95,7 +120,7 @@ test-go: ## (internal) Run Go unit tests for all modules
 	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
 		if [ -n "$$(find "$$mod" -name "*_test.go" -print -quit)" ]; then \
 			echo "Testing $$mod..."; \
-			(cd "$$mod" && go test -v -race -cover ./...); \
+			(cd "$$mod" && go test -v -race -cover ./...) || exit 1; \
 		else \
 			echo "Skipping $$mod (no tests found)."; \
 		fi; \
@@ -117,8 +142,8 @@ docker-build: ## 🐳 Build all Docker images
 
 .PHONY: docker-up
 docker-up: ## 🚀 Start all services with Docker Compose
-	@echo "--> Starting all services..."
-	@docker-compose up -d
+	@echo "--> Starting all services and waiting for them to be healthy..."
+	@docker-compose up -d --wait
 
 .PHONY: docker-down
 docker-down: ## 🛑 Stop all services
@@ -138,10 +163,27 @@ docker-clean: ## 🧹 Clean Docker images and containers
 
 
 .PHONY: demo
-demo: docker-build docker-up ## 🎯 Full demo: build and start all services
+demo: ensure-env docker-build docker-up migrate ## 🎯 Full demo: build and start all services
 	@echo "✅ EventFlow Commerce is running!"
 	@echo "🌐 API Gateway: http://localhost:${API_GATEWAY_PORT}"
 	@echo "📊 Grafana: http://localhost:${GRAFANA_PORT} (admin/admin)"
 	@echo "🔍 Jaeger: http://localhost:${JAEGER_UI_PORT}"
 	@echo "📈 Prometheus: http://localhost:${PROMETHEUS_PORT}"
 	@echo "⚙️ Kafka UI: http://localhost:${KAFKA_UI_PORT}"
+
+.PHONY: ensure-env
+ensure-env: ## 🔐 Create .env file from template if it doesn't exist, with secure JWT secret
+	@if [ ! -f .env ]; then \
+		echo "--> Creating .env file from .env.example..."; \
+		cp .env.example .env; \
+		JWT_SECRET=$$(openssl rand -base64 32); \
+		ESCAPED_SECRET=$$(echo "$$JWT_SECRET" | sed 's/[\/&]/\\&/g'); \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			sed -i '' "s/JWT_SECRET=CHANGE_ME_IN_PRODUCTION_GENERATE_WITH_openssl_rand_base64_32/JWT_SECRET=$$ESCAPED_SECRET/" .env; \
+		else \
+			sed -i "s/JWT_SECRET=CHANGE_ME_IN_PRODUCTION_GENERATE_WITH_openssl_rand_base64_32/JWT_SECRET=$$ESCAPED_SECRET/" .env; \
+		fi; \
+		echo "✅ .env file created with secure JWT secret"; \
+	else \
+		echo "✅ .env file already exists"; \
+	fi

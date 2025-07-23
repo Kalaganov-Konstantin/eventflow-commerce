@@ -19,6 +19,12 @@ services:
       - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL}
       - INVENTORY_SERVICE_URL=${INVENTORY_SERVICE_URL}
       - NOTIFICATION_SERVICE_URL=${NOTIFICATION_SERVICE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - API_GATEWAY_LOGGER_LEVEL=${API_GATEWAY_LOGGER_LEVEL}
+      - API_GATEWAY_LOGGER_ENVIRONMENT=${API_GATEWAY_LOGGER_ENVIRONMENT}
+      - API_GATEWAY_LOGGER_OUTPUT_PATHS=${API_GATEWAY_LOGGER_OUTPUT_PATHS}
+      - API_GATEWAY_SERVICE_NAME=${API_GATEWAY_SERVICE_NAME}
+      - API_GATEWAY_SERVICE_VERSION=${API_GATEWAY_SERVICE_VERSION}
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +79,8 @@ services:
       start_period: 40s
 
   order-migrate:
+    profiles:
+      - tools
     image: migrate/migrate
     volumes:
       - ./services/order/migrations:/migrations
@@ -112,6 +120,8 @@ services:
       start_period: 40s
 
   payment-migrate:
+    profiles:
+      - tools
     image: migrate/migrate
     volumes:
       - ./services/payment/migrations:/migrations
@@ -151,6 +161,8 @@ services:
       start_period: 40s
 
   inventory-migrate:
+    profiles:
+      - tools
     image: migrate/migrate
     volumes:
       - ./services/inventory/migrations:/migrations
@@ -160,6 +172,7 @@ services:
         condition: service_healthy
 
   notification-service:
+    image: eventflow-commerce-notification-service:latest
     build:
       context: .
       dockerfile: services/notification/Dockerfile
@@ -189,9 +202,9 @@ services:
       start_period: 40s
 
   notification-migrate:
-    build:
-      context: .
-      dockerfile: services/notification/Dockerfile
+    profiles:
+      - tools
+    image: eventflow-commerce-notification-service:latest
     command:
       - "yoyo"
       - "apply"
