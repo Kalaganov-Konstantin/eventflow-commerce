@@ -32,6 +32,10 @@ fmt: fmt-go fmt-python ## 🎨 Format all code (Go + Python)
 test: test-go test-python ## 🧪 Run all unit tests
 	@echo "✅ All tests passed successfully."
 
+.PHONY: test-coverage
+test-coverage: test-go-coverage test-python-coverage ## 📊 Run all tests with coverage
+	@echo "✅ All tests with coverage completed successfully."
+
 .PHONY: migrate
 migrate: migrate-order migrate-payment migrate-inventory migrate-notification ## 🚀 Run all database migrations
 	@echo "✅ All migrations applied successfully."
@@ -130,6 +134,28 @@ test-go: ## (internal) Run Go unit tests for all modules
 test-python: ## (internal) Run Python unit tests
 	@echo "--> Running Python unit tests for 'notification' service..."
 	@cd services/notification && uv run pytest
+
+# --- Coverage Testing ---
+.PHONY: test-go-coverage
+test-go-coverage: ## (internal) Run Go unit tests with coverage
+	@echo "--> Running Go unit tests with coverage..."
+	@echo "mode: atomic" > coverage.out
+	@for mod in $$(go work edit -json | jq -r ".Use[].DiskPath"); do \
+		if [ -n "$$(find "$$mod" -name "*_test.go" -print -quit)" ]; then \
+			echo "Testing $$mod with coverage..."; \
+			(cd "$$mod" && go test -v -race -coverprofile=coverage.tmp -covermode=atomic ./... && \
+			if [ -f coverage.tmp ]; then \
+				tail -n +2 coverage.tmp >> ../../../coverage.out && rm coverage.tmp; \
+			fi) || exit 1; \
+		else \
+			echo "Skipping $$mod (no tests found)."; \
+		fi; \
+	done
+
+.PHONY: test-python-coverage
+test-python-coverage: ## (internal) Run Python unit tests with coverage
+	@echo "--> Running Python unit tests with coverage for 'notification' service..."
+	@cd services/notification && uv run pytest --cov=notification --cov-report=xml:coverage.xml --cov-report=term-missing
 
 # =============================================================================
 # DOCKER COMMANDS
