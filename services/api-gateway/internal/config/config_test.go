@@ -319,7 +319,7 @@ func TestLoadConfig(t *testing.T) {
 		if err := os.Setenv(key, value); err != nil {
 			t.Fatalf("Failed to set env var %s: %v", key, err)
 		}
-		defer os.Unsetenv(key) // Clean up after test
+		defer func() { _ = os.Unsetenv(key) }() // Clean up after test
 	}
 
 	config, err := LoadConfig()
@@ -358,14 +358,16 @@ func TestLoadConfig_MissingRequiredEnvVars(t *testing.T) {
 	originalValues := make(map[string]string)
 	for _, envVar := range requiredEnvVars {
 		originalValues[envVar] = os.Getenv(envVar)
-		os.Unsetenv(envVar)
+		if err := os.Unsetenv(envVar); err != nil {
+			t.Fatalf("Failed to unset env var %s: %v", envVar, err)
+		}
 	}
 
 	// Clean up after test
 	defer func() {
 		for envVar, originalValue := range originalValues {
 			if originalValue != "" {
-				os.Setenv(envVar, originalValue)
+				_ = os.Setenv(envVar, originalValue)
 			}
 		}
 	}()
@@ -393,7 +395,7 @@ func TestLoadConfig_InvalidEnvValues(t *testing.T) {
 		if err := os.Setenv(key, value); err != nil {
 			t.Fatalf("Failed to set env var %s: %v", key, err)
 		}
-		defer os.Unsetenv(key) // Clean up after test
+		defer func() { _ = os.Unsetenv(key) }() // Clean up after test
 	}
 
 	_, err := LoadConfig()
