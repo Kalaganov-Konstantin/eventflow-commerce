@@ -170,15 +170,24 @@ func LoadKafkaConfig() (KafkaConfig, error) {
 	v.SetDefault("KAFKA_GROUP_ID", "eventflow-service")
 	v.SetDefault("KAFKA_DLQ_TOPIC", "eventflow-dlq")
 
-	var config KafkaConfig
-	// Viper doesn't directly unmarshal comma-separated strings to slices
-	// So we read it as a string and then split it.
-	brokersStr := v.GetString("KAFKA_BROKERS")
-	config.Brokers = strings.Split(brokersStr, ",")
+	if err := v.BindEnv("KAFKA_BROKERS"); err != nil {
+		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_BROKERS: %w", err)
+	}
+	if err := v.BindEnv("KAFKA_GROUP_ID"); err != nil {
+		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_GROUP_ID: %w", err)
+	}
+	if err := v.BindEnv("KAFKA_DLQ_TOPIC"); err != nil {
+		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_DLQ_TOPIC: %w", err)
+	}
 
+	var config KafkaConfig
 	if err := v.Unmarshal(&config); err != nil {
 		return KafkaConfig{}, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+
+	// Viper doesn't directly unmarshal comma-separated strings to slices,
+	// so assign brokers explicitly after Unmarshal to avoid it being overwritten.
+	config.Brokers = strings.Split(v.GetString("KAFKA_BROKERS"), ",")
 
 	return config, nil
 }
