@@ -35,7 +35,7 @@ func TestNewServer(t *testing.T) {
 
 	logger := zaptest.NewLogger(t)
 
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -91,7 +91,7 @@ func TestServer_HTTPServerConfiguration(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
 	// Create server with pre-injected test metrics
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -140,7 +140,7 @@ func TestServer_ComponentsInitialization(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -184,7 +184,7 @@ func TestServer_MiddlewareChain(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -220,7 +220,7 @@ func TestServer_MetricsEndpoint(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -262,7 +262,7 @@ func TestServer_Stop(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -305,7 +305,7 @@ func TestServer_StartAndStop(t *testing.T) {
 	}
 
 	logger := zaptest.NewLogger(t)
-	srv := NewServer(ServerOptions{
+	srv := NewServer(Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,

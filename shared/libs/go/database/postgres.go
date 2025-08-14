@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // registers the postgres driver for database/sql
 	"github.com/spf13/viper"
 )
 

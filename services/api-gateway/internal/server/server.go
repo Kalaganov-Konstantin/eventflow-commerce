@@ -21,15 +21,15 @@ type Server struct {
 	router      *handler.Router
 }
 
-// ServerOptions contains options for creating a new server
-type ServerOptions struct {
+// Options contains options for creating a new server
+type Options struct {
 	Config  *config.Config
 	Logger  *zap.Logger
 	Metrics *handler.Metrics
 }
 
 // NewServer creates a new server instance
-func NewServer(opts ServerOptions) *Server {
+func NewServer(opts Options) *Server {
 	// Create rate limiter
 	rateLimiter := handler.NewRateLimiter(
 		opts.Config.RateLimit.RequestsPerMinute,

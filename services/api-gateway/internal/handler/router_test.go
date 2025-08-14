@@ -82,7 +82,7 @@ func TestHealthCheck(t *testing.T) {
 
 func TestProxyToService(t *testing.T) {
 	// Create a test backend server
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte(`{"message": "backend response"}`)); err != nil {
@@ -383,7 +383,7 @@ func TestHealthCheck_ErrorHandling(t *testing.T) {
 
 func TestProxyToService_ContextTimeout(t *testing.T) {
 	// Create a backend that takes longer than the context timeout
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(1 * time.Second) // Longer than 30s timeout in proxyToService
 		w.WriteHeader(http.StatusOK)
 	}))
