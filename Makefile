@@ -15,7 +15,7 @@ help: ## ✨ Show this help message
 setup: ## 📦 Install all project dependencies
 	@echo "--> Installing Go dependencies..."
 	@go mod download
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.2
 	@go install golang.org/x/tools/cmd/goimports@latest
 	@echo "--> Installing Python dependencies for the 'notification' service..."
 	@cd services/notification && uv sync --locked --all-extras --dev
