@@ -5,7 +5,7 @@ runs:
   steps:
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25.12'
         cache-dependency-path: go.work
         cache: true
     - name: Install jq
