@@ -107,7 +107,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	defer rl.Close()
 	middleware := RateLimitMiddleware(rl, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("success")); err != nil {
 			t.Fatalf("Failed to write response: %v", err)
@@ -157,7 +157,7 @@ func TestRateLimitMiddleware_XForwardedFor(t *testing.T) {
 	defer rl.Close()
 	middleware := RateLimitMiddleware(rl, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -190,7 +190,7 @@ func TestJWTMiddleware_MissingToken(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	middleware := JWTMiddleware("secret", logger, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -219,7 +219,7 @@ func TestJWTMiddleware_InvalidFormat(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	middleware := JWTMiddleware("secret", logger, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -295,7 +295,7 @@ func TestJWTMiddleware_InvalidToken(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	middleware := JWTMiddleware("secret", logger, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -340,7 +340,7 @@ func TestJWTMiddleware_ExpiredToken(t *testing.T) {
 		t.Fatalf("Failed to create test token: %v", err)
 	}
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -361,7 +361,7 @@ func TestJWTMiddleware_HealthCheckBypass(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	middleware := JWTMiddleware("secret", logger, nil)
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("healthy")); err != nil {
 			t.Fatalf("Failed to write response: %v", err)
@@ -395,7 +395,7 @@ func TestJWTMiddleware_HealthCheckBypass(t *testing.T) {
 	}
 }
 
-func TestRateLimiter_Close(t *testing.T) {
+func TestRateLimiter_Close(_ *testing.T) {
 	rl := NewRateLimiter(10, time.Minute)
 
 	// Test that Close doesn't panic
@@ -447,7 +447,7 @@ func TestGetUserFromContext(t *testing.T) {
 	}
 }
 
-func TestRateLimiter_CleanupStops(t *testing.T) {
+func TestRateLimiter_CleanupStops(_ *testing.T) {
 	rl := NewRateLimiter(1, 50*time.Millisecond)
 
 	// Allow one request to populate the map
@@ -478,7 +478,7 @@ func TestJWTMiddleware_UnsupportedSigningMethod(t *testing.T) {
 	// Create a malformed token with RSA256 header that will trigger the signing method check
 	tokenString := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNlcjEyMyIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGUiOiJ1c2VyIiwiZXhwIjoxNjQwOTk1MjAwfQ.invalid-signature"
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -532,7 +532,7 @@ func TestRateLimitMiddleware_JSONResponse(t *testing.T) {
 	defer rl.Close()
 
 	middleware := RateLimitMiddleware(rl, nil)
-	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -586,7 +586,7 @@ func TestJWTMiddleware_InvalidClaims(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	middleware := JWTMiddleware(secret, logger, nil)
-	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -685,7 +685,7 @@ func TestJWTMiddlewareWithMetrics_AllPaths(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			middleware := JWTMiddleware(secret, logger, metrics)
-			handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
@@ -708,7 +708,7 @@ func TestRateLimitMiddlewareWithMetrics_Paths(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	middleware := RateLimitMiddleware(rl, metrics)
-	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

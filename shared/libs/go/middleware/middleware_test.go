@@ -13,7 +13,7 @@ import (
 
 func TestRequestID_GeneratesWhenMissing(t *testing.T) {
 	var gotID string
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		gotID, _ = r.Context().Value(RequestIDKey).(string)
 	}))
 
@@ -34,7 +34,7 @@ func TestRequestID_ForwardsIncoming(t *testing.T) {
 	const incomingID = "incoming-request-id"
 
 	var gotID string
-	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		gotID, _ = r.Context().Value(RequestIDKey).(string)
 	}))
 
@@ -53,7 +53,7 @@ func TestRequestID_ForwardsIncoming(t *testing.T) {
 
 func TestCORS_SetsHeadersAndCallsNext(t *testing.T) {
 	nextCalled := false
-	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		nextCalled = true
 	}))
 
@@ -77,7 +77,7 @@ func TestCORS_SetsHeadersAndCallsNext(t *testing.T) {
 
 func TestCORS_ShortCircuitsOptions(t *testing.T) {
 	nextCalled := false
-	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		nextCalled = true
 	}))
 
@@ -97,7 +97,7 @@ func TestLogging(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	logger := zap.New(core)
 
-	handler := Logging(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Logging(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 
@@ -126,7 +126,7 @@ func TestRecovery_RecoversPanicAsInternalServerError(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	logger := zap.New(core)
 
-	handler := Recovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(logger)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	}))
 
@@ -157,7 +157,7 @@ func TestRecovery_RecoversPanicAsInternalServerError(t *testing.T) {
 func TestRecovery_PassesThroughWithoutPanic(t *testing.T) {
 	logger := zap.NewNop()
 
-	handler := Recovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -175,7 +175,7 @@ func TestRecovery_PassesThroughWithoutPanic(t *testing.T) {
 }
 
 func TestTimeout_SetsDeadlineOnContext(t *testing.T) {
-	handler := Timeout(50 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Timeout(50 * time.Millisecond)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Context().Deadline(); !ok {
 			t.Error("request context has no deadline")
 		}
@@ -198,7 +198,7 @@ func TestChain_AppliesMiddlewaresInOrder(t *testing.T) {
 		}
 	}
 
-	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	final := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		order = append(order, "final")
 	})
 

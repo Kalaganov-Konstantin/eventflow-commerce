@@ -36,7 +36,7 @@ func main() {
 		zap.String("version", cfg.Service.Version))
 
 	// Create and start server
-	srv := server.NewServer(server.ServerOptions{
+	srv := server.NewServer(server.Options{
 		Config: cfg,
 		Logger: logger,
 	})

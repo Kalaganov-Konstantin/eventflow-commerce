@@ -62,7 +62,7 @@ type RateLimiter struct {
 }
 
 // NewRateLimiter creates a new rate limiter using token bucket algorithm
-func NewRateLimiter(requestsPerMinute int, windowDuration time.Duration) *RateLimiter {
+func NewRateLimiter(requestsPerMinute int, _ time.Duration) *RateLimiter {
 	if requestsPerMinute <= 0 {
 		requestsPerMinute = 1 // Minimum rate to avoid division by zero
 	}

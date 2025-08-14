@@ -61,7 +61,7 @@ func TestAPIGateway_Integration(t *testing.T) {
 	testMetrics := handler.NewTestMetrics()
 
 	// Create server
-	srv := server.NewServer(server.ServerOptions{
+	srv := server.NewServer(server.Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
@@ -126,7 +126,7 @@ func TestAPIGateway_Integration(t *testing.T) {
 		testCfg := *cfg
 		testCfg.RateLimit.RequestsPerMinute = 2
 
-		testSrv := server.NewServer(server.ServerOptions{
+		testSrv := server.NewServer(server.Options{
 			Config:  &testCfg,
 			Logger:  logger,
 			Metrics: handler.NewTestMetrics(),

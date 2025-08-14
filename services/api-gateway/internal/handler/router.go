@@ -59,7 +59,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // healthCheck handles health check requests
-func (r *Router) healthCheck(w http.ResponseWriter, req *http.Request) {
+func (r *Router) healthCheck(w http.ResponseWriter, _ *http.Request) {
 	uptime := time.Since(r.startTime)
 
 	status := HealthStatus{
