@@ -20,19 +20,24 @@ func LoadConfig() (*Config, error) {
 
 	loader := config.New("payment")
 	loader.SetDefault("server.host", "0.0.0.0")
+	loader.SetDefault("kafka.group_id", "payment-service")
+	loader.SetDefault("kafka.dlq_topic", "payments.events.dlq")
 
 	// Explicitly bind environment variables
-	if err := loader.BindEnv("server.port", "PAYMENT_SERVICE_PORT"); err != nil {
+	if err := loader.BindEnv("server.port", "PAYMENT_SERVER_PORT", "PAYMENT_SERVICE_PORT"); err != nil {
 		return nil, fmt.Errorf("failed to bind server.port: %w", err)
 	}
 	if err := loader.BindEnv("database.url", "PAYMENT_DATABASE_URL"); err != nil {
 		return nil, fmt.Errorf("failed to bind database.url: %w", err)
 	}
-	if err := loader.BindEnv("redis.host", "REDIS_URL"); err != nil {
-		return nil, fmt.Errorf("failed to bind redis.host: %w", err)
+	if err := loader.BindEnv("redis.url", "REDIS_URL"); err != nil {
+		return nil, fmt.Errorf("failed to bind redis.url: %w", err)
 	}
 	if err := loader.BindEnv("kafka.brokers", "KAFKA_BROKERS"); err != nil {
 		return nil, fmt.Errorf("failed to bind kafka.brokers: %w", err)
+	}
+	if err := loader.BindEnv("kafka.group_id", "PAYMENT_KAFKA_GROUP_ID"); err != nil {
+		return nil, fmt.Errorf("failed to bind kafka.group_id: %w", err)
 	}
 	if err := loader.BindEnv("jaeger.endpoint", "JAEGER_ENDPOINT"); err != nil {
 		return nil, fmt.Errorf("failed to bind jaeger.endpoint: %w", err)
@@ -73,11 +78,11 @@ func LoadConfig() (*Config, error) {
 func (c *Config) Validate() error {
 	// Validation for Server
 	if c.Server.Port == "" {
-		return fmt.Errorf("PAYMENT_SERVICE_PORT environment variable is not set")
+		return fmt.Errorf("PAYMENT_SERVER_PORT (or PAYMENT_SERVICE_PORT) environment variable is not set")
 	}
 
 	// Validation for Redis
-	if c.Redis.Host == "" {
+	if c.Redis.URL == "" {
 		return fmt.Errorf("REDIS_URL environment variable is not set")
 	}
 
