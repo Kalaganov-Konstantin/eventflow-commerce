@@ -18,32 +18,43 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Valid configuration",
 			envVars: map[string]string{
-				"INVENTORY_SERVICE_PORT": "8080",
+				"INVENTORY_SERVER_PORT":  "8080",
 				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"REDIS_URL":              "localhost:6379",
+				"REDIS_URL":              "redis://localhost:6379",
 				"KAFKA_BROKERS":          "localhost:9092",
 				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
-			name: "Missing INVENTORY_SERVICE_PORT",
+			name: "INVENTORY_SERVICE_PORT still works as fallback",
+			envVars: map[string]string{
+				"INVENTORY_SERVICE_PORT": "8080",
+				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+				"REDIS_URL":              "redis://localhost:6379",
+				"KAFKA_BROKERS":          "localhost:9092",
+				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Missing both port variables",
 			envVars: map[string]string{
 				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"REDIS_URL":              "localhost:6379",
+				"REDIS_URL":              "redis://localhost:6379",
 				"KAFKA_BROKERS":          "localhost:9092",
 				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
-			errMsg:  "INVENTORY_SERVICE_PORT environment variable is not set",
+			errMsg:  "INVENTORY_SERVER_PORT (or INVENTORY_SERVICE_PORT) environment variable is not set",
 		},
 		{
 			name: "Missing INVENTORY_DATABASE_URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVICE_PORT": "8080",
-				"REDIS_URL":              "localhost:6379",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_SERVER_PORT": "8080",
+				"REDIS_URL":             "redis://localhost:6379",
+				"KAFKA_BROKERS":         "localhost:9092",
+				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "INVENTORY_DATABASE_URL environment variable is not set",
@@ -51,9 +62,9 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Invalid database URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVICE_PORT": "8080",
+				"INVENTORY_SERVER_PORT":  "8080",
 				"INVENTORY_DATABASE_URL": "invalid-url",
-				"REDIS_URL":              "localhost:6379",
+				"REDIS_URL":              "redis://localhost:6379",
 				"KAFKA_BROKERS":          "localhost:9092",
 				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
 			},
@@ -63,7 +74,7 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Missing Redis URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVICE_PORT": "8080",
+				"INVENTORY_SERVER_PORT":  "8080",
 				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
 				"KAFKA_BROKERS":          "localhost:9092",
 				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
@@ -112,6 +123,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.Database.Host != "localhost" {
 					t.Errorf("LoadConfig() Database.Host = %v, want localhost", cfg.Database.Host)
 				}
+				if cfg.Kafka.GroupID != "inventory-service" {
+					t.Errorf("LoadConfig() Kafka.GroupID = %v, want inventory-service", cfg.Kafka.GroupID)
+				}
+				if cfg.Kafka.DLQTopic != "inventory.events.dlq" {
+					t.Errorf("LoadConfig() Kafka.DLQTopic = %v, want inventory.events.dlq", cfg.Kafka.DLQTopic)
+				}
 			}
 
 			// Clean up
@@ -143,8 +160,7 @@ func TestValidate(t *testing.T) {
 					SSLMode:  "disable",
 				},
 				Redis: config.RedisConfig{
-					Host: "localhost",
-					Port: "6379",
+					URL: "redis://localhost:6379",
 				},
 				Kafka: config.KafkaConfig{
 					Brokers: []string{"localhost:9092"},
@@ -159,7 +175,7 @@ func TestValidate(t *testing.T) {
 			name: "Missing server port",
 			config: Config{
 				Redis: config.RedisConfig{
-					Host: "localhost",
+					URL: "redis://localhost:6379",
 				},
 				Kafka: config.KafkaConfig{
 					Brokers: []string{"localhost:9092"},
@@ -169,7 +185,7 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "INVENTORY_SERVICE_PORT environment variable is not set",
+			errMsg:  "INVENTORY_SERVER_PORT (or INVENTORY_SERVICE_PORT) environment variable is not set",
 		},
 	}
 
@@ -193,10 +209,12 @@ func TestValidate(t *testing.T) {
 
 func clearEnvVars() {
 	envVars := []string{
+		"INVENTORY_SERVER_PORT",
 		"INVENTORY_SERVICE_PORT",
 		"INVENTORY_DATABASE_URL",
 		"REDIS_URL",
 		"KAFKA_BROKERS",
+		"INVENTORY_KAFKA_GROUP_ID",
 		"JAEGER_ENDPOINT",
 	}
 	for _, env := range envVars {
