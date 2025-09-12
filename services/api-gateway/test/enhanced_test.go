@@ -101,7 +101,7 @@ func TestConfigValidation(t *testing.T) {
 			name: "Valid config",
 			config: config.Config{
 				Server: sharedConfig.ServerConfig{Port: "8080"},
-				Redis:  sharedConfig.RedisConfig{Host: "redis:6379"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
 				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
 				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
 				Database: sharedConfig.DatabaseConfig{

@@ -60,14 +60,14 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("service.version", "1.0.0")
 
 	// Explicitly bind environment variables
-	if err := loader.BindEnv("server.port", "API_GATEWAY_PORT"); err != nil {
+	if err := loader.BindEnv("server.port", "API_GATEWAY_SERVER_PORT", "API_GATEWAY_PORT"); err != nil {
 		return nil, fmt.Errorf("failed to bind server.port: %w", err)
 	}
 	if err := loader.BindEnv("database.url", "API_GATEWAY_DATABASE_URL"); err != nil {
 		return nil, fmt.Errorf("failed to bind database.url: %w", err)
 	}
-	if err := loader.BindEnv("redis.host", "REDIS_URL"); err != nil {
-		return nil, fmt.Errorf("failed to bind redis.host: %w", err)
+	if err := loader.BindEnv("redis.url", "REDIS_URL"); err != nil {
+		return nil, fmt.Errorf("failed to bind redis.url: %w", err)
 	}
 	if err := loader.BindEnv("kafka.brokers", "KAFKA_BROKERS"); err != nil {
 		return nil, fmt.Errorf("failed to bind kafka.brokers: %w", err)
@@ -126,11 +126,11 @@ func LoadConfig() (*Config, error) {
 func (c *Config) Validate() error {
 	// Validation for Server
 	if c.Server.Port == "" {
-		return fmt.Errorf("API_GATEWAY_PORT environment variable is not set")
+		return fmt.Errorf("API_GATEWAY_SERVER_PORT (or API_GATEWAY_PORT) environment variable is not set")
 	}
 
 	// Validation for Redis
-	if c.Redis.Host == "" {
+	if c.Redis.URL == "" {
 		return fmt.Errorf("REDIS_URL environment variable is not set")
 	}
 
