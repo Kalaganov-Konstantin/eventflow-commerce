@@ -21,10 +21,13 @@ type RedisConfig struct {
 	Port     string `mapstructure:"port"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
+	URL      string `mapstructure:"url"`
 }
 
 type KafkaConfig struct {
-	Brokers []string `mapstructure:"brokers"`
+	Brokers  []string `mapstructure:"brokers"`
+	GroupID  string   `mapstructure:"group_id"`
+	DLQTopic string   `mapstructure:"dlq_topic"`
 }
 
 type JaegerConfig struct {

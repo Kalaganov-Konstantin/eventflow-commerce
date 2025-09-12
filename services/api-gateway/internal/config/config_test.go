@@ -21,8 +21,7 @@ func TestValidate(t *testing.T) {
 					Port: "8080",
 				},
 				Redis: sharedConfig.RedisConfig{
-					Host: "redis",
-					Port: "6379",
+					URL: "redis://redis:6379",
 				},
 				Kafka: sharedConfig.KafkaConfig{
 					Brokers: []string{"kafka:9092"},
@@ -308,7 +307,7 @@ func TestLoadConfig(t *testing.T) {
 		"RATE_LIMIT_REQUESTS_PER_MINUTE": "100",
 		"RATE_LIMIT_WINDOW_DURATION":     "60",
 		"API_GATEWAY_DATABASE_URL":       "postgres://test:test@postgres:5432/test?sslmode=disable",
-		"API_GATEWAY_PORT":               "8080",
+		"API_GATEWAY_SERVER_PORT":        "8080",
 		"REDIS_URL":                      "redis:6379",
 		"KAFKA_BROKERS":                  "kafka:9092",
 		"JAEGER_ENDPOINT":                "jaeger:14268",
@@ -341,6 +340,41 @@ func TestLoadConfig(t *testing.T) {
 
 	if config.RateLimit.WindowDuration != 60 {
 		t.Errorf("Expected rate limit window duration 60, got %d", config.RateLimit.WindowDuration)
+	}
+
+	if config.Server.Port != "8080" {
+		t.Errorf("Expected server port 8080, got %s", config.Server.Port)
+	}
+}
+
+func TestLoadConfig_PortFallsBackToLegacyVariable(t *testing.T) {
+	envVars := map[string]string{
+		"JWT_SECRET":               "this-is-a-very-long-secret-key-for-jwt-validation",
+		"ORDER_SERVICE_URL":        "http://order:8080",
+		"PAYMENT_SERVICE_URL":      "http://payment:8080",
+		"INVENTORY_SERVICE_URL":    "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL": "http://notification:8080",
+		"API_GATEWAY_DATABASE_URL": "postgres://test:test@postgres:5432/test?sslmode=disable",
+		"API_GATEWAY_PORT":         "9090",
+		"REDIS_URL":                "redis:6379",
+		"KAFKA_BROKERS":            "kafka:9092",
+		"JAEGER_ENDPOINT":          "jaeger:14268",
+	}
+
+	for key, value := range envVars {
+		if err := os.Setenv(key, value); err != nil {
+			t.Fatalf("Failed to set env var %s: %v", key, err)
+		}
+		defer func() { _ = os.Unsetenv(key) }()
+	}
+
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if config.Server.Port != "9090" {
+		t.Errorf("Expected server port 9090 from legacy API_GATEWAY_PORT, got %s", config.Server.Port)
 	}
 }
 

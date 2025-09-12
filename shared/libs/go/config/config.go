@@ -50,9 +50,10 @@ func (cl *CfgLoader) SetDefault(key string, value interface{}) {
 	cl.v.SetDefault(key, value)
 }
 
-// BindEnv binds a specific environment variable to a config key
-func (cl *CfgLoader) BindEnv(key string, envVar string) error {
-	return cl.v.BindEnv(key, envVar)
+// BindEnv binds one or more environment variables to a config key.
+// The first variable with a non-empty value wins.
+func (cl *CfgLoader) BindEnv(key string, envVars ...string) error {
+	return cl.v.BindEnv(append([]string{key}, envVars...)...)
 }
 
 // GetString returns the value associated with the key as a string.

@@ -18,32 +18,43 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Valid configuration",
 			envVars: map[string]string{
-				"ORDER_SERVICE_PORT": "8080",
+				"ORDER_SERVER_PORT":  "8080",
 				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
-				"REDIS_URL":          "localhost:6379",
+				"REDIS_URL":          "redis://localhost:6379",
 				"KAFKA_BROKERS":      "localhost:9092",
 				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
-			name: "Missing ORDER_SERVICE_PORT",
+			name: "ORDER_SERVICE_PORT still works as fallback",
+			envVars: map[string]string{
+				"ORDER_SERVICE_PORT": "8080",
+				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"REDIS_URL":          "redis://localhost:6379",
+				"KAFKA_BROKERS":      "localhost:9092",
+				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Missing both port variables",
 			envVars: map[string]string{
 				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
-				"REDIS_URL":          "localhost:6379",
+				"REDIS_URL":          "redis://localhost:6379",
 				"KAFKA_BROKERS":      "localhost:9092",
 				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
-			errMsg:  "ORDER_SERVICE_PORT environment variable is not set",
+			errMsg:  "ORDER_SERVER_PORT (or ORDER_SERVICE_PORT) environment variable is not set",
 		},
 		{
 			name: "Missing ORDER_DATABASE_URL",
 			envVars: map[string]string{
-				"ORDER_SERVICE_PORT": "8080",
-				"REDIS_URL":          "localhost:6379",
-				"KAFKA_BROKERS":      "localhost:9092",
-				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+				"ORDER_SERVER_PORT": "8080",
+				"REDIS_URL":         "redis://localhost:6379",
+				"KAFKA_BROKERS":     "localhost:9092",
+				"JAEGER_ENDPOINT":   "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "ORDER_DATABASE_URL environment variable is not set",
@@ -51,14 +62,25 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Invalid database URL",
 			envVars: map[string]string{
-				"ORDER_SERVICE_PORT": "8080",
+				"ORDER_SERVER_PORT":  "8080",
 				"ORDER_DATABASE_URL": "invalid-url",
-				"REDIS_URL":          "localhost:6379",
+				"REDIS_URL":          "redis://localhost:6379",
 				"KAFKA_BROKERS":      "localhost:9092",
 				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "database host is required",
+		},
+		{
+			name: "Missing REDIS_URL",
+			envVars: map[string]string{
+				"ORDER_SERVER_PORT":  "8080",
+				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"KAFKA_BROKERS":      "localhost:9092",
+				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+			},
+			wantErr: true,
+			errMsg:  "REDIS_URL environment variable is not set",
 		},
 	}
 
@@ -101,6 +123,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.Database.Host != "localhost" {
 					t.Errorf("LoadConfig() Database.Host = %v, want localhost", cfg.Database.Host)
 				}
+				if cfg.Kafka.GroupID != "order-service" {
+					t.Errorf("LoadConfig() Kafka.GroupID = %v, want order-service", cfg.Kafka.GroupID)
+				}
+				if cfg.Kafka.DLQTopic != "orders.events.dlq" {
+					t.Errorf("LoadConfig() Kafka.DLQTopic = %v, want orders.events.dlq", cfg.Kafka.DLQTopic)
+				}
 			}
 
 			// Clean up
@@ -132,8 +160,7 @@ func TestValidate(t *testing.T) {
 					SSLMode:  "disable",
 				},
 				Redis: config.RedisConfig{
-					Host: "localhost",
-					Port: "6379",
+					URL: "redis://localhost:6379",
 				},
 				Kafka: config.KafkaConfig{
 					Brokers: []string{"localhost:9092"},
@@ -148,7 +175,7 @@ func TestValidate(t *testing.T) {
 			name: "Missing server port",
 			config: Config{
 				Redis: config.RedisConfig{
-					Host: "localhost",
+					URL: "redis://localhost:6379",
 				},
 				Kafka: config.KafkaConfig{
 					Brokers: []string{"localhost:9092"},
@@ -158,7 +185,7 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "ORDER_SERVICE_PORT environment variable is not set",
+			errMsg:  "ORDER_SERVER_PORT (or ORDER_SERVICE_PORT) environment variable is not set",
 		},
 	}
 
@@ -182,10 +209,12 @@ func TestValidate(t *testing.T) {
 
 func clearEnvVars() {
 	envVars := []string{
+		"ORDER_SERVER_PORT",
 		"ORDER_SERVICE_PORT",
 		"ORDER_DATABASE_URL",
 		"REDIS_URL",
 		"KAFKA_BROKERS",
+		"ORDER_KAFKA_GROUP_ID",
 		"JAEGER_ENDPOINT",
 	}
 	for _, env := range envVars {

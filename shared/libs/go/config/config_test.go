@@ -61,6 +61,20 @@ func TestBindEnv(t *testing.T) {
 	}
 }
 
+func TestBindEnv_MultipleVariables_FirstNonEmptyWins(t *testing.T) {
+	t.Setenv("PRIMARY_PORT_VAR", "9090")
+	t.Setenv("FALLBACK_PORT_VAR", "1234")
+
+	loader := New("multi_bind_service")
+	if err := loader.BindEnv("server.port", "PRIMARY_PORT_VAR", "FALLBACK_PORT_VAR"); err != nil {
+		t.Fatalf("BindEnv() error = %v", err)
+	}
+
+	if got := loader.GetString("server.port"); got != "9090" {
+		t.Errorf("GetString() = %q, want %q (first variable must win)", got, "9090")
+	}
+}
+
 func TestEnv_OverridesDefault(t *testing.T) {
 	t.Setenv("OVERRIDE_SERVICE_SERVER_PORT", "9999")
 
