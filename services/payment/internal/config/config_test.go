@@ -129,6 +129,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.Kafka.DLQTopic != "payments.events.dlq" {
 					t.Errorf("LoadConfig() Kafka.DLQTopic = %v, want payments.events.dlq", cfg.Kafka.DLQTopic)
 				}
+				if cfg.Service.Name != "payment" {
+					t.Errorf("LoadConfig() Service.Name = %v, want payment", cfg.Service.Name)
+				}
+				if cfg.Logger.Level != "info" {
+					t.Errorf("LoadConfig() Logger.Level = %v, want info", cfg.Logger.Level)
+				}
 			}
 
 			// Clean up
