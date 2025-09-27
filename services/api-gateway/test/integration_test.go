@@ -229,12 +229,12 @@ func TestAPIGateway_Integration(t *testing.T) {
 			{
 				name:                "Order service",
 				path:                "/api/v1/orders/123",
-				expectedBackendPath: "/123",
+				expectedBackendPath: "/api/v1/orders/123",
 			},
 			{
 				name:                "Payment service",
 				path:                "/api/v1/payments/456",
-				expectedBackendPath: "/456",
+				expectedBackendPath: "/api/v1/payments/456",
 			},
 		}
 

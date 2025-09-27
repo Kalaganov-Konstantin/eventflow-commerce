@@ -45,12 +45,12 @@ func (r *Router) SetupRoutes() {
 	// Health check endpoint
 	r.mux.HandleFunc("/health", r.healthCheck)
 
-	// API routes with service-specific prefixes
-	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(r.config.OrderServiceURL, "/api/v1/orders"))
-	r.mux.HandleFunc("/api/v1/payments/", r.createProxyHandler(r.config.PaymentServiceURL, "/api/v1/payments"))
-	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(r.config.InventoryServiceURL, "/api/v1/inventory"))
-	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(r.config.InventoryServiceURL, "/api/v1/products"))
-	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(r.config.NotificationServiceURL, "/api/v1/notifications"))
+	// API routes with service-specific prefixes; the backend receives the full path
+	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(r.config.OrderServiceURL))
+	r.mux.HandleFunc("/api/v1/payments/", r.createProxyHandler(r.config.PaymentServiceURL))
+	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(r.config.InventoryServiceURL))
+	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(r.config.InventoryServiceURL))
+	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(r.config.NotificationServiceURL))
 }
 
 // ServeHTTP implements http.Handler
@@ -96,14 +96,15 @@ func (r *Router) getServiceVersion() string {
 }
 
 // createProxyHandler creates a reverse proxy handler for a service
-func (r *Router) createProxyHandler(targetURL, prefix string) http.HandlerFunc {
+func (r *Router) createProxyHandler(targetURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		r.proxyToService(w, req, targetURL, prefix)
+		r.proxyToService(w, req, targetURL)
 	}
 }
 
-// proxyToService handles proxying requests to backend services
-func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, targetURL, prefix string) {
+// proxyToService handles proxying requests to backend services. The backend
+// receives the full request path; the service owns its own routes.
+func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, targetURL string) {
 	// Parse target URL
 	target, err := url.Parse(targetURL)
 	if err != nil {
@@ -120,14 +121,6 @@ func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, target
 	originalPath := req.URL.Path
 	req.URL.Host = target.Host
 	req.URL.Scheme = target.Scheme
-
-	// Strip prefix from path
-	if strings.HasPrefix(req.URL.Path, prefix) {
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, prefix)
-		if req.URL.Path == "" {
-			req.URL.Path = "/"
-		}
-	}
 
 	// Set proxy headers
 	r.setProxyHeaders(req, originalPath, target.Host)

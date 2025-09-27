@@ -170,27 +170,27 @@ func TestRouteMapping(t *testing.T) {
 		{
 			name:         "Order service route",
 			requestPath:  "/api/v1/orders/123",
-			expectedPath: "/123",
+			expectedPath: "/api/v1/orders/123",
 		},
 		{
 			name:         "Payment service route",
 			requestPath:  "/api/v1/payments/456",
-			expectedPath: "/456",
+			expectedPath: "/api/v1/payments/456",
 		},
 		{
 			name:         "Inventory service route",
 			requestPath:  "/api/v1/inventory/789",
-			expectedPath: "/789",
+			expectedPath: "/api/v1/inventory/789",
 		},
 		{
 			name:         "Products route to inventory",
 			requestPath:  "/api/v1/products/abc",
-			expectedPath: "/abc",
+			expectedPath: "/api/v1/products/abc",
 		},
 		{
 			name:         "Notification service route",
 			requestPath:  "/api/v1/notifications/def",
-			expectedPath: "/def",
+			expectedPath: "/api/v1/notifications/def",
 		},
 	}
 
@@ -413,11 +413,11 @@ func TestProxyToService_ContextTimeout(t *testing.T) {
 	}
 }
 
-func TestProxyToService_EmptyPath(t *testing.T) {
+func TestProxyToService_PrefixPathUnchanged(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check that empty path becomes "/"
-		if r.URL.Path != "/" {
-			t.Errorf("Expected path '/', got '%s'", r.URL.Path)
+		// The backend owns the full path; the gateway must not strip the prefix
+		if r.URL.Path != "/api/v1/orders/" {
+			t.Errorf("Expected path '/api/v1/orders/', got '%s'", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("root")); err != nil {
@@ -435,7 +435,6 @@ func TestProxyToService_EmptyPath(t *testing.T) {
 	router := NewRouter(cfg, logger, time.Now())
 	router.SetupRoutes()
 
-	// Request exactly the prefix path with trailing slash (should become "/")
 	req := httptest.NewRequest("GET", "/api/v1/orders/", nil)
 	w := httptest.NewRecorder()
 
