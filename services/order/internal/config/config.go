@@ -13,6 +13,8 @@ type Config struct {
 	Redis    config.RedisConfig    `mapstructure:"redis"`
 	Kafka    config.KafkaConfig    `mapstructure:"kafka"`
 	Jaeger   config.JaegerConfig   `mapstructure:"jaeger"`
+	Logger   config.LoggerConfig  `mapstructure:"logger"`
+	Service  config.ServiceConfig `mapstructure:"service"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -22,6 +24,11 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("server.host", "0.0.0.0")
 	loader.SetDefault("kafka.group_id", "order-service")
 	loader.SetDefault("kafka.dlq_topic", "orders.events.dlq")
+	loader.SetDefault("logger.level", "info")
+	loader.SetDefault("logger.environment", "development")
+	loader.SetDefault("logger.output_paths", []string{"stdout"})
+	loader.SetDefault("service.name", "order")
+	loader.SetDefault("service.version", "1.0.0")
 
 	// Explicitly bind environment variables
 	if err := loader.BindEnv("server.port", "ORDER_SERVER_PORT", "ORDER_SERVICE_PORT"); err != nil {

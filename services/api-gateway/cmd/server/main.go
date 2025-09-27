@@ -11,24 +11,32 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/server"
+	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"go.uber.org/zap"
 )
 
 func main() {
-	// Initialize logger
-	logger, err := zap.NewProduction()
-	if err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
-	}
-	defer func() { _ = logger.Sync() }()
-
-	logger.Info("Starting API Gateway service...")
-
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		logger.Fatal("Failed to load config", zap.Error(err))
+		log.Fatalf("Failed to load config: %v", err)
 	}
+
+	// Initialize logger from configuration
+	appLogger, err := sharedlogger.New(sharedlogger.Config{
+		Level:       cfg.Logger.Level,
+		Environment: cfg.Logger.Environment,
+		Service:     cfg.Service.Name,
+		Version:     cfg.Service.Version,
+		OutputPaths: cfg.Logger.OutputPaths,
+	})
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer func() { _ = appLogger.Sync() }()
+	logger := appLogger.Logger
+
+	logger.Info("Starting API Gateway service...")
 
 	logger.Info("Configuration loaded successfully",
 		zap.String("host", cfg.Server.Host),
