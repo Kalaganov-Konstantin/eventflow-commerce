@@ -129,6 +129,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.Kafka.DLQTopic != "inventory.events.dlq" {
 					t.Errorf("LoadConfig() Kafka.DLQTopic = %v, want inventory.events.dlq", cfg.Kafka.DLQTopic)
 				}
+				if cfg.Service.Name != "inventory" {
+					t.Errorf("LoadConfig() Service.Name = %v, want inventory", cfg.Service.Name)
+				}
+				if cfg.Logger.Level != "info" {
+					t.Errorf("LoadConfig() Logger.Level = %v, want info", cfg.Logger.Level)
+				}
 			}
 
 			// Clean up
