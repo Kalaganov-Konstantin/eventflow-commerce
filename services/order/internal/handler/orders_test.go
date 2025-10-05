@@ -1,0 +1,190 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	stderrors "errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
+	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/google/uuid"
+	"go.uber.org/zap/zaptest"
+)
+
+var errTestRepository = stderrors.New("repository failure")
+
+// fakeOrderRepository is an in-memory OrderRepository test double.
+type fakeOrderRepository struct {
+	saveErr error
+	saved   []*domain.Order
+
+	ordersByID map[uuid.UUID]*domain.Order
+	getErr     error
+
+	listResult []*domain.Order
+	listErr    error
+}
+
+func newFakeOrderRepository() *fakeOrderRepository {
+	return &fakeOrderRepository{ordersByID: make(map[uuid.UUID]*domain.Order)}
+}
+
+func (f *fakeOrderRepository) Save(_ context.Context, order *domain.Order) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.saved = append(f.saved, order)
+	f.ordersByID[order.ID] = order
+	return nil
+}
+
+func (f *fakeOrderRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Order, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	order, ok := f.ordersByID[id]
+	if !ok {
+		return nil, apperrors.NewOrderNotFound(id.String())
+	}
+	return order, nil
+}
+
+func (f *fakeOrderRepository) ListByCustomer(_ context.Context, _ uuid.UUID, _, _ int) ([]*domain.Order, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listResult, nil
+}
+
+func newTestMux(t *testing.T, repo OrderRepository) *http.ServeMux {
+	t.Helper()
+	h := NewOrdersHandler(repo, zaptest.NewLogger(t))
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/orders", h.Create)
+	return mux
+}
+
+func decodeAppError(t *testing.T, body []byte) apperrors.AppError {
+	t.Helper()
+	var appErr apperrors.AppError
+	if err := json.Unmarshal(body, &appErr); err != nil {
+		t.Fatalf("failed to decode error body: %v", err)
+	}
+	return appErr
+}
+
+func TestOrdersHandler_Create(t *testing.T) {
+	validBody := `{"items":[{"product_id":"` + uuid.New().String() + `","product_name":"Widget","quantity":2,"unit_price":9.99}],"currency":"USD"}`
+
+	tests := []struct {
+		name       string
+		userID     string
+		body       string
+		repo       *fakeOrderRepository
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "valid order",
+			userID:     uuid.New().String(),
+			body:       validBody,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "missing X-User-ID header",
+			userID:     "",
+			body:       validBody,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name:       "invalid X-User-ID header",
+			userID:     "not-a-uuid",
+			body:       validBody,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "UNAUTHORIZED",
+		},
+		{
+			name:       "malformed JSON body",
+			userID:     uuid.New().String(),
+			body:       `{`,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "no items",
+			userID:     uuid.New().String(),
+			body:       `{"items":[],"currency":"USD"}`,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION_ERROR",
+		},
+		{
+			name:       "invalid item product id",
+			userID:     uuid.New().String(),
+			body:       `{"items":[{"product_id":"not-a-uuid","product_name":"Widget","quantity":1,"unit_price":1}],"currency":"USD"}`,
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION_ERROR",
+		},
+		{
+			name:       "repository failure",
+			userID:     uuid.New().String(),
+			body:       validBody,
+			repo:       &fakeOrderRepository{saveErr: errTestRepository},
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL_SERVER_ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := newTestMux(t, tt.repo)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBufferString(tt.body))
+			if tt.userID != "" {
+				req.Header.Set("X-User-ID", tt.userID)
+			}
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusCreated {
+				var got orderResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if got.CustomerID != tt.userID {
+					t.Errorf("CustomerID = %v, want %v", got.CustomerID, tt.userID)
+				}
+				if got.Status != string(domain.StatusPending) {
+					t.Errorf("Status = %v, want %v", got.Status, domain.StatusPending)
+				}
+				if got.TotalAmount != 19.98 {
+					t.Errorf("TotalAmount = %v, want 19.98", got.TotalAmount)
+				}
+				if len(tt.repo.saved) != 1 {
+					t.Errorf("expected order to be saved, saved = %d", len(tt.repo.saved))
+				}
+				return
+			}
+
+			appErr := decodeAppError(t, w.Body.Bytes())
+			if appErr.Code != tt.wantCode {
+				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
+			}
+		})
+	}
+}

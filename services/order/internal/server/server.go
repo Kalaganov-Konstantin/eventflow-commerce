@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/handler"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -45,17 +47,22 @@ func New(opts Options) *Server {
 	mux := http.NewServeMux()
 	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
 
+	if opts.DB != nil {
+		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), opts.Logger)
+		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
+	}
+
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "order")
 	chain := middleware.Chain(
 		middleware.Recovery(opts.Logger),
 		middleware.RequestID,
 		middleware.Logging(opts.Logger),
 	)
-	handler := chain(httpMetrics.Middleware(mux))
+	wrappedHandler := chain(httpMetrics.Middleware(mux))
 
 	outer := http.NewServeMux()
 	outer.Handle("/metrics", promhttp.Handler())
-	outer.Handle("/", handler)
+	outer.Handle("/", wrappedHandler)
 
 	runtime := httpserver.New(httpserver.Options{
 		Addr:    opts.Config.Server.Host + ":" + opts.Config.Server.Port,
