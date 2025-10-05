@@ -5,6 +5,7 @@ go 1.25.12
 replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go => ../../shared/libs/go
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.22.0
