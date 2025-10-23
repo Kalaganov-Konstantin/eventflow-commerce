@@ -6,6 +6,9 @@ import (
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/handler"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
@@ -24,6 +27,7 @@ type Options struct {
 	Config  *config.Config
 	Logger  *zap.Logger
 	Metrics prometheus.Registerer
+	DB      *database.DB
 }
 
 // New builds the order HTTP server: health checks, metrics and the shared middleware chain.
@@ -33,8 +37,22 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
+	var checks map[string]httpserver.Check
+	if opts.DB != nil {
+		checks = map[string]httpserver.Check{
+			"database": opts.DB.PingContext,
+		}
+	}
+
 	mux := http.NewServeMux()
-	httpserver.NewHealthHandlers(opts.Config.Service.Name, nil).Register(mux)
+	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
+
+	if opts.DB != nil {
+		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), opts.Logger)
+		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
+		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
+		mux.HandleFunc("GET /api/v1/orders", ordersHandler.List)
+	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "order")
 	chain := middleware.Chain(
@@ -42,11 +60,11 @@ func New(opts Options) *Server {
 		middleware.RequestID,
 		middleware.Logging(opts.Logger),
 	)
-	handler := chain(httpMetrics.Middleware(mux))
+	wrappedHandler := chain(httpMetrics.Middleware(mux))
 
 	outer := http.NewServeMux()
 	outer.Handle("/metrics", promhttp.Handler())
-	outer.Handle("/", handler)
+	outer.Handle("/", wrappedHandler)
 
 	runtime := httpserver.New(httpserver.Options{
 		Addr:    opts.Config.Server.Host + ":" + opts.Config.Server.Port,

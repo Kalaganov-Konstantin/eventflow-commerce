@@ -5,7 +5,9 @@ go 1.25.12
 replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go => ../../shared/libs/go
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go v0.0.0-00010101000000-000000000000
+	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.22.0
 	go.uber.org/zap v1.27.0
 )
@@ -15,7 +17,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect

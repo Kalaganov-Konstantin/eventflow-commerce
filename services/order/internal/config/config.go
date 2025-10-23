@@ -3,18 +3,30 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 )
 
+// DatabasePoolConfig sizes the postgres connection pool.
+type DatabasePoolConfig struct {
+	MaxOpenConns int           `mapstructure:"max_open_conns"`
+	MaxIdleConns int           `mapstructure:"max_idle_conns"`
+	MaxLifetime  time.Duration `mapstructure:"max_lifetime"`
+}
+
 type Config struct {
-	Server   config.ServerConfig   `mapstructure:"server"`
-	Database config.DatabaseConfig `mapstructure:"database"`
-	Redis    config.RedisConfig    `mapstructure:"redis"`
-	Kafka    config.KafkaConfig    `mapstructure:"kafka"`
-	Jaeger   config.JaegerConfig   `mapstructure:"jaeger"`
-	Logger   config.LoggerConfig  `mapstructure:"logger"`
-	Service  config.ServiceConfig `mapstructure:"service"`
+	Server       config.ServerConfig   `mapstructure:"server"`
+	Database     config.DatabaseConfig `mapstructure:"database"`
+	DatabasePool DatabasePoolConfig    `mapstructure:"database_pool"`
+	// DatabaseURL is the raw connection string used to open the pool; Database
+	// above holds the same information split into fields for validation.
+	DatabaseURL string               `mapstructure:"-"`
+	Redis       config.RedisConfig   `mapstructure:"redis"`
+	Kafka       config.KafkaConfig   `mapstructure:"kafka"`
+	Jaeger      config.JaegerConfig  `mapstructure:"jaeger"`
+	Logger      config.LoggerConfig  `mapstructure:"logger"`
+	Service     config.ServiceConfig `mapstructure:"service"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -29,6 +41,9 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("logger.output_paths", []string{"stdout"})
 	loader.SetDefault("service.name", "order")
 	loader.SetDefault("service.version", "1.0.0")
+	loader.SetDefault("database_pool.max_open_conns", 25)
+	loader.SetDefault("database_pool.max_idle_conns", 5)
+	loader.SetDefault("database_pool.max_lifetime", "5m")
 
 	// Explicitly bind environment variables
 	if err := loader.BindEnv("server.port", "ORDER_SERVER_PORT", "ORDER_SERVICE_PORT"); err != nil {
@@ -60,6 +75,7 @@ func LoadConfig() (*Config, error) {
 	if dbURLString == "" {
 		return nil, fmt.Errorf("ORDER_DATABASE_URL environment variable is not set")
 	}
+	cfg.DatabaseURL = dbURLString
 
 	parsedURL, err := url.Parse(dbURLString)
 	if err != nil {
