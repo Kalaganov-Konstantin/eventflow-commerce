@@ -6,12 +6,18 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultListLimit = 20
+	maxListLimit     = 100
 )
 
 // OrderRepository is the persistence port the orders handler depends on.
@@ -167,6 +173,64 @@ func (h *OrdersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, newOrderResponse(order))
+}
+
+type listOrdersResponse struct {
+	Orders []orderResponse `json:"orders"`
+	Limit  int             `json:"limit"`
+	Offset int             `json:"offset"`
+}
+
+// List handles GET /api/v1/orders.
+func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
+	customerID, err := customerIDFromHeader(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	orders, err := h.repo.ListByCustomer(r.Context(), customerID, limit, offset)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	responses := make([]orderResponse, len(orders))
+	for i, order := range orders {
+		responses[i] = newOrderResponse(order)
+	}
+
+	h.writeJSON(w, http.StatusOK, listOrdersResponse{Orders: responses, Limit: limit, Offset: offset})
+}
+
+func parsePagination(r *http.Request) (limit, offset int, err error) {
+	limit = defaultListLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, convErr := strconv.Atoi(raw)
+		if convErr != nil || parsed < 0 {
+			return 0, 0, apperrors.NewValidationError("limit", "must be a non-negative integer")
+		}
+		limit = parsed
+	}
+	if limit > maxListLimit {
+		limit = maxListLimit
+	}
+
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		parsed, convErr := strconv.Atoi(raw)
+		if convErr != nil || parsed < 0 {
+			return 0, 0, apperrors.NewValidationError("offset", "must be a non-negative integer")
+		}
+		offset = parsed
+	}
+
+	return limit, offset, nil
 }
 
 func customerIDFromHeader(r *http.Request) (uuid.UUID, error) {

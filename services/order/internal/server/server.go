@@ -51,6 +51,7 @@ func New(opts Options) *Server {
 		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
 		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
+		mux.HandleFunc("GET /api/v1/orders", ordersHandler.List)
 	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "order")

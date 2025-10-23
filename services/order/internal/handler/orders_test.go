@@ -27,6 +27,8 @@ type fakeOrderRepository struct {
 
 	listResult []*domain.Order
 	listErr    error
+	lastLimit  int
+	lastOffset int
 }
 
 func newFakeOrderRepository() *fakeOrderRepository {
@@ -53,7 +55,9 @@ func (f *fakeOrderRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.
 	return order, nil
 }
 
-func (f *fakeOrderRepository) ListByCustomer(_ context.Context, _ uuid.UUID, _, _ int) ([]*domain.Order, error) {
+func (f *fakeOrderRepository) ListByCustomer(_ context.Context, _ uuid.UUID, limit, offset int) ([]*domain.Order, error) {
+	f.lastLimit = limit
+	f.lastOffset = offset
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -66,6 +70,7 @@ func newTestMux(t *testing.T, repo OrderRepository) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/orders", h.Create)
 	mux.HandleFunc("GET /api/v1/orders/{id}", h.Get)
+	mux.HandleFunc("GET /api/v1/orders", h.List)
 	return mux
 }
 
@@ -263,6 +268,96 @@ func TestOrdersHandler_Get(t *testing.T) {
 				}
 				if got.ID != order.ID.String() {
 					t.Errorf("ID = %v, want %v", got.ID, order.ID.String())
+				}
+				return
+			}
+
+			appErr := decodeAppError(t, w.Body.Bytes())
+			if appErr.Code != tt.wantCode {
+				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestOrdersHandler_List(t *testing.T) {
+	sampleOrder := &domain.Order{ID: uuid.New(), CustomerID: uuid.New(), Status: domain.StatusPending}
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantCode   string
+		wantLimit  int
+		wantOffset int
+	}{
+		{
+			name:       "default pagination",
+			query:      "",
+			wantStatus: http.StatusOK,
+			wantLimit:  20,
+			wantOffset: 0,
+		},
+		{
+			name:       "custom limit and offset",
+			query:      "?limit=5&offset=10",
+			wantStatus: http.StatusOK,
+			wantLimit:  5,
+			wantOffset: 10,
+		},
+		{
+			name:       "limit capped at 100",
+			query:      "?limit=500",
+			wantStatus: http.StatusOK,
+			wantLimit:  100,
+			wantOffset: 0,
+		},
+		{
+			name:       "invalid limit",
+			query:      "?limit=abc",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION_ERROR",
+		},
+		{
+			name:       "negative offset",
+			query:      "?offset=-1",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "VALIDATION_ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeOrderRepository{listResult: []*domain.Order{sampleOrder}}
+			mux := newTestMux(t, repo)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders"+tt.query, nil)
+			req.Header.Set("X-User-ID", uuid.New().String())
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusOK {
+				var got listOrdersResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if got.Limit != tt.wantLimit {
+					t.Errorf("Limit = %v, want %v", got.Limit, tt.wantLimit)
+				}
+				if got.Offset != tt.wantOffset {
+					t.Errorf("Offset = %v, want %v", got.Offset, tt.wantOffset)
+				}
+				if len(got.Orders) != 1 {
+					t.Errorf("Orders = %v, want 1 entry", got.Orders)
+				}
+				if repo.lastLimit != tt.wantLimit || repo.lastOffset != tt.wantOffset {
+					t.Errorf("repository received limit=%d offset=%d, want limit=%d offset=%d",
+						repo.lastLimit, repo.lastOffset, tt.wantLimit, tt.wantOffset)
 				}
 				return
 			}
