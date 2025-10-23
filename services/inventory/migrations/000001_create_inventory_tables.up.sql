@@ -9,8 +9,8 @@ CREATE TABLE products (
     sku VARCHAR(100) UNIQUE NOT NULL,
     category VARCHAR(100),
     brand VARCHAR(100),
-    price DECIMAL(12,2) NOT NULL CHECK (price >= 0),
-    cost DECIMAL(12,2) CHECK (cost >= 0),
+    price_cents BIGINT NOT NULL CHECK (price_cents >= 0),
+    cost_cents BIGINT CHECK (cost_cents >= 0),
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     weight DECIMAL(8,3),
     dimensions JSONB, -- {length, width, height}
@@ -46,7 +46,7 @@ CREATE TABLE inventory_movements (
     reference_id UUID, -- order_id, purchase_id, etc.
     reference_type VARCHAR(50), -- 'order', 'purchase', 'adjustment', etc.
     reason TEXT,
-    cost_per_unit DECIMAL(12,2),
+    cost_per_unit_cents BIGINT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_by UUID -- user who made the movement
 );
