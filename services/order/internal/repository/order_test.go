@@ -18,23 +18,23 @@ func newTestOrder() *domain.Order {
 	orderID := uuid.New()
 
 	return &domain.Order{
-		ID:          orderID,
-		CustomerID:  uuid.New(),
-		Status:      domain.StatusPending,
-		TotalAmount: 19.98,
-		Currency:    "USD",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Version:     1,
+		ID:               orderID,
+		CustomerID:       uuid.New(),
+		Status:           domain.StatusPending,
+		TotalAmountCents: 1998,
+		Currency:         "USD",
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Version:          1,
 		Items: []domain.OrderItem{
 			{
-				ID:          uuid.New(),
-				ProductID:   uuid.New(),
-				ProductName: "Widget",
-				ProductSKU:  "WID-1",
-				Quantity:    2,
-				UnitPrice:   9.99,
-				TotalPrice:  19.98,
+				ID:              uuid.New(),
+				ProductID:       uuid.New(),
+				ProductName:     "Widget",
+				ProductSKU:      "WID-1",
+				Quantity:        2,
+				UnitPriceCents:  999,
+				TotalPriceCents: 1998,
 			},
 		},
 	}
@@ -52,12 +52,12 @@ func TestOrderRepository_Save(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO orders").
-			WithArgs(order.ID, order.CustomerID, string(order.Status), order.TotalAmount, order.Currency,
+			WithArgs(order.ID, order.CustomerID, string(order.Status), order.TotalAmountCents, order.Currency,
 				order.CreatedAt, order.UpdatedAt, order.Version).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("INSERT INTO order_items").
 			WithArgs(order.Items[0].ID, order.ID, order.Items[0].ProductID, order.Items[0].ProductName,
-				order.Items[0].ProductSKU, order.Items[0].Quantity, order.Items[0].UnitPrice, order.Items[0].TotalPrice).
+				order.Items[0].ProductSKU, order.Items[0].Quantity, order.Items[0].UnitPriceCents, order.Items[0].TotalPriceCents).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
@@ -149,14 +149,14 @@ func TestOrderRepository_GetByID(t *testing.T) {
 
 		want := newTestOrder()
 
-		orderRows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount", "currency", "created_at", "updated_at", "version"}).
-			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmount, want.Currency,
+		orderRows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
 				want.CreatedAt, want.UpdatedAt, want.Version)
 		mock.ExpectQuery("FROM orders WHERE id").WithArgs(want.ID).WillReturnRows(orderRows)
 
-		itemRows := sqlmock.NewRows([]string{"id", "product_id", "product_name", "product_sku", "quantity", "unit_price", "total_price"}).
+		itemRows := sqlmock.NewRows([]string{"id", "product_id", "product_name", "product_sku", "quantity", "unit_price_cents", "total_price_cents"}).
 			AddRow(want.Items[0].ID.String(), want.Items[0].ProductID.String(), want.Items[0].ProductName,
-				want.Items[0].ProductSKU, want.Items[0].Quantity, want.Items[0].UnitPrice, want.Items[0].TotalPrice)
+				want.Items[0].ProductSKU, want.Items[0].Quantity, want.Items[0].UnitPriceCents, want.Items[0].TotalPriceCents)
 		mock.ExpectQuery("FROM order_items WHERE order_id").WithArgs(want.ID).WillReturnRows(itemRows)
 
 		repo := NewOrderRepository(db)
@@ -222,8 +222,8 @@ func TestOrderRepository_ListByCustomer(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		want := newTestOrder()
-		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount", "currency", "created_at", "updated_at", "version"}).
-			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmount, want.Currency,
+		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
 				want.CreatedAt, want.UpdatedAt, want.Version)
 		mock.ExpectQuery("FROM orders WHERE customer_id").WithArgs(want.CustomerID, 20, 0).WillReturnRows(rows)
 
@@ -248,7 +248,7 @@ func TestOrderRepository_ListByCustomer(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		customerID := uuid.New()
-		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount", "currency", "created_at", "updated_at", "version"})
+		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"})
 		mock.ExpectQuery("FROM orders WHERE customer_id").WithArgs(customerID, 20, 0).WillReturnRows(rows)
 
 		repo := NewOrderRepository(db)

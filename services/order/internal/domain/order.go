@@ -2,7 +2,6 @@
 package domain
 
 import (
-	"math"
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
@@ -23,28 +22,28 @@ const (
 	StatusCancelled      Status = "cancelled"
 )
 
-// OrderItem is a single line item of an order.
+// OrderItem is a single line item of an order. Money fields are integer minor units (cents).
 type OrderItem struct {
-	ID          uuid.UUID
-	ProductID   uuid.UUID
-	ProductName string
-	ProductSKU  string
-	Quantity    int
-	UnitPrice   float64
-	TotalPrice  float64
+	ID              uuid.UUID
+	ProductID       uuid.UUID
+	ProductName     string
+	ProductSKU      string
+	Quantity        int
+	UnitPriceCents  int64
+	TotalPriceCents int64
 }
 
-// Order is the order aggregate root.
+// Order is the order aggregate root. Money fields are integer minor units (cents).
 type Order struct {
-	ID          uuid.UUID
-	CustomerID  uuid.UUID
-	Status      Status
-	TotalAmount float64
-	Currency    string
-	Items       []OrderItem
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Version     int
+	ID               uuid.UUID
+	CustomerID       uuid.UUID
+	Status           Status
+	TotalAmountCents int64
+	Currency         string
+	Items            []OrderItem
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	Version          int
 }
 
 // NewOrder builds a pending order from its line items, computing per-item and order totals.
@@ -61,7 +60,7 @@ func NewOrder(customerID uuid.UUID, items []OrderItem, currency string) (*Order,
 
 	now := time.Now().UTC()
 	orderItems := make([]OrderItem, len(items))
-	var total float64
+	var totalCents int64
 
 	for i, item := range items {
 		if item.ProductID == uuid.Nil {
@@ -73,26 +72,26 @@ func NewOrder(customerID uuid.UUID, items []OrderItem, currency string) (*Order,
 		if item.Quantity <= 0 {
 			return nil, errors.NewValidationError("quantity", "must be greater than zero")
 		}
-		if item.UnitPrice < 0 {
-			return nil, errors.NewValidationError("unit_price", "must not be negative")
+		if item.UnitPriceCents < 0 {
+			return nil, errors.NewValidationError("unit_price_cents", "must not be negative")
 		}
 
 		item.ID = uuid.New()
-		item.TotalPrice = roundToCents(item.UnitPrice * float64(item.Quantity))
+		item.TotalPriceCents = item.UnitPriceCents * int64(item.Quantity)
 		orderItems[i] = item
-		total += item.TotalPrice
+		totalCents += item.TotalPriceCents
 	}
 
 	return &Order{
-		ID:          uuid.New(),
-		CustomerID:  customerID,
-		Status:      StatusPending,
-		TotalAmount: roundToCents(total),
-		Currency:    currency,
-		Items:       orderItems,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Version:     1,
+		ID:               uuid.New(),
+		CustomerID:       customerID,
+		Status:           StatusPending,
+		TotalAmountCents: totalCents,
+		Currency:         currency,
+		Items:            orderItems,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		Version:          1,
 	}, nil
 }
 
@@ -126,8 +125,4 @@ func (o *Order) transition(from, to Status) error {
 	}
 	o.Status = to
 	return nil
-}
-
-func roundToCents(v float64) float64 {
-	return math.Round(v*100) / 100
 }

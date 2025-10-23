@@ -31,9 +31,9 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO orders (id, customer_id, status, total_amount, currency, created_at, updated_at, version)
+		INSERT INTO orders (id, customer_id, status, total_amount_cents, currency, created_at, updated_at, version)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, order.ID, order.CustomerID, string(order.Status), order.TotalAmount, order.Currency,
+	`, order.ID, order.CustomerID, string(order.Status), order.TotalAmountCents, order.Currency,
 		order.CreatedAt, order.UpdatedAt, order.Version)
 	if err != nil {
 		return fmt.Errorf("insert order: %w", err)
@@ -41,10 +41,10 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 
 	for _, item := range order.Items {
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO order_items (id, order_id, product_id, product_name, product_sku, quantity, unit_price, total_price)
+			INSERT INTO order_items (id, order_id, product_id, product_name, product_sku, quantity, unit_price_cents, total_price_cents)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		`, item.ID, order.ID, item.ProductID, item.ProductName, item.ProductSKU,
-			item.Quantity, item.UnitPrice, item.TotalPrice)
+			item.Quantity, item.UnitPriceCents, item.TotalPriceCents)
 		if err != nil {
 			return fmt.Errorf("insert order item: %w", err)
 		}
@@ -59,7 +59,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 // GetByID assembles the full order aggregate, including its items.
 func (r *OrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Order, error) {
 	order, err := r.scanOrder(r.db.QueryRowContext(ctx, `
-		SELECT id, customer_id, status, total_amount, currency, created_at, updated_at, version
+		SELECT id, customer_id, status, total_amount_cents, currency, created_at, updated_at, version
 		FROM orders WHERE id = $1
 	`, id))
 	if stderrors.Is(err, sql.ErrNoRows) {
@@ -81,7 +81,7 @@ func (r *OrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Or
 // ListByCustomer returns a page of order summaries for the given customer, most recent first.
 func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*domain.Order, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, customer_id, status, total_amount, currency, created_at, updated_at, version
+		SELECT id, customer_id, status, total_amount_cents, currency, created_at, updated_at, version
 		FROM orders WHERE customer_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
@@ -135,7 +135,7 @@ func (r *OrderRepository) scanOrder(row rowScanner) (*domain.Order, error) {
 	var order domain.Order
 	var status string
 
-	if err := row.Scan(&order.ID, &order.CustomerID, &status, &order.TotalAmount, &order.Currency,
+	if err := row.Scan(&order.ID, &order.CustomerID, &status, &order.TotalAmountCents, &order.Currency,
 		&order.CreatedAt, &order.UpdatedAt, &order.Version); err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (r *OrderRepository) scanOrder(row rowScanner) (*domain.Order, error) {
 
 func (r *OrderRepository) itemsByOrderID(ctx context.Context, orderID uuid.UUID) ([]domain.OrderItem, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, product_id, product_name, product_sku, quantity, unit_price, total_price
+		SELECT id, product_id, product_name, product_sku, quantity, unit_price_cents, total_price_cents
 		FROM order_items WHERE order_id = $1
 		ORDER BY created_at
 	`, orderID)
@@ -160,7 +160,7 @@ func (r *OrderRepository) itemsByOrderID(ctx context.Context, orderID uuid.UUID)
 		var item domain.OrderItem
 		var sku sql.NullString
 		if err := rows.Scan(&item.ID, &item.ProductID, &item.ProductName, &sku,
-			&item.Quantity, &item.UnitPrice, &item.TotalPrice); err != nil {
+			&item.Quantity, &item.UnitPriceCents, &item.TotalPriceCents); err != nil {
 			return nil, fmt.Errorf("scan order item: %w", err)
 		}
 		item.ProductSKU = sku.String

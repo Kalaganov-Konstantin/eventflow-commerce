@@ -6,7 +6,7 @@ CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     customer_id UUID NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled')),
-    total_amount DECIMAL(12,2) NOT NULL CHECK (total_amount >= 0),
+    total_amount_cents BIGINT NOT NULL CHECK (total_amount_cents >= 0),
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     shipping_address JSONB,
     billing_address JSONB,
@@ -24,8 +24,8 @@ CREATE TABLE order_items (
     product_name VARCHAR(255) NOT NULL,
     product_sku VARCHAR(100),
     quantity INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price DECIMAL(12,2) NOT NULL CHECK (unit_price >= 0),
-    total_price DECIMAL(12,2) NOT NULL CHECK (total_price >= 0),
+    unit_price_cents BIGINT NOT NULL CHECK (unit_price_cents >= 0),
+    total_price_cents BIGINT NOT NULL CHECK (total_price_cents >= 0),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

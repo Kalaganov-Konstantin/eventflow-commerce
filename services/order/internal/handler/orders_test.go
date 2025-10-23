@@ -84,7 +84,7 @@ func decodeAppError(t *testing.T, body []byte) apperrors.AppError {
 }
 
 func TestOrdersHandler_Create(t *testing.T) {
-	validBody := `{"items":[{"product_id":"` + uuid.New().String() + `","product_name":"Widget","quantity":2,"unit_price":9.99}],"currency":"USD"}`
+	validBody := `{"items":[{"product_id":"` + uuid.New().String() + `","product_name":"Widget","quantity":2,"unit_price_cents":999}],"currency":"USD"}`
 
 	tests := []struct {
 		name       string
@@ -136,7 +136,7 @@ func TestOrdersHandler_Create(t *testing.T) {
 		{
 			name:       "invalid item product id",
 			userID:     uuid.New().String(),
-			body:       `{"items":[{"product_id":"not-a-uuid","product_name":"Widget","quantity":1,"unit_price":1}],"currency":"USD"}`,
+			body:       `{"items":[{"product_id":"not-a-uuid","product_name":"Widget","quantity":1,"unit_price_cents":100}],"currency":"USD"}`,
 			repo:       newFakeOrderRepository(),
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "VALIDATION_ERROR",
@@ -178,8 +178,8 @@ func TestOrdersHandler_Create(t *testing.T) {
 				if got.Status != string(domain.StatusPending) {
 					t.Errorf("Status = %v, want %v", got.Status, domain.StatusPending)
 				}
-				if got.TotalAmount != 19.98 {
-					t.Errorf("TotalAmount = %v, want 19.98", got.TotalAmount)
+				if got.TotalAmountCents != 1998 {
+					t.Errorf("TotalAmountCents = %v, want 1998", got.TotalAmountCents)
 				}
 				if len(tt.repo.saved) != 1 {
 					t.Errorf("expected order to be saved, saved = %d", len(tt.repo.saved))
@@ -199,11 +199,11 @@ func TestOrdersHandler_Get(t *testing.T) {
 	owner := uuid.New()
 	other := uuid.New()
 	order := &domain.Order{
-		ID:          uuid.New(),
-		CustomerID:  owner,
-		Status:      domain.StatusPending,
-		TotalAmount: 19.98,
-		Currency:    "USD",
+		ID:               uuid.New(),
+		CustomerID:       owner,
+		Status:           domain.StatusPending,
+		TotalAmountCents: 1998,
+		Currency:         "USD",
 	}
 
 	tests := []struct {

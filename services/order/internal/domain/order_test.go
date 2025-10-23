@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewOrder(t *testing.T) {
-	validItem := OrderItem{ProductID: uuid.New(), ProductName: "Widget", Quantity: 2, UnitPrice: 9.995}
+	validItem := OrderItem{ProductID: uuid.New(), ProductName: "Widget", Quantity: 2, UnitPriceCents: 999}
 
 	tests := []struct {
 		name       string
@@ -21,10 +21,10 @@ func TestNewOrder(t *testing.T) {
 		{"missing customer id", uuid.Nil, []OrderItem{validItem}, "USD", true},
 		{"no items", uuid.New(), nil, "USD", true},
 		{"missing currency", uuid.New(), []OrderItem{validItem}, "", true},
-		{"missing product id", uuid.New(), []OrderItem{{ProductName: "Widget", Quantity: 1, UnitPrice: 1}}, "USD", true},
-		{"missing product name", uuid.New(), []OrderItem{{ProductID: uuid.New(), Quantity: 1, UnitPrice: 1}}, "USD", true},
-		{"zero quantity", uuid.New(), []OrderItem{{ProductID: uuid.New(), ProductName: "Widget", Quantity: 0, UnitPrice: 1}}, "USD", true},
-		{"negative unit price", uuid.New(), []OrderItem{{ProductID: uuid.New(), ProductName: "Widget", Quantity: 1, UnitPrice: -1}}, "USD", true},
+		{"missing product id", uuid.New(), []OrderItem{{ProductName: "Widget", Quantity: 1, UnitPriceCents: 100}}, "USD", true},
+		{"missing product name", uuid.New(), []OrderItem{{ProductID: uuid.New(), Quantity: 1, UnitPriceCents: 100}}, "USD", true},
+		{"zero quantity", uuid.New(), []OrderItem{{ProductID: uuid.New(), ProductName: "Widget", Quantity: 0, UnitPriceCents: 100}}, "USD", true},
+		{"negative unit price", uuid.New(), []OrderItem{{ProductID: uuid.New(), ProductName: "Widget", Quantity: 1, UnitPriceCents: -1}}, "USD", true},
 	}
 
 	for _, tt := range tests {
@@ -51,12 +51,12 @@ func TestNewOrder(t *testing.T) {
 			if order.Items[0].ID == uuid.Nil {
 				t.Error("item ID was not generated")
 			}
-			wantTotal := roundToCents(tt.items[0].UnitPrice * float64(tt.items[0].Quantity))
-			if order.TotalAmount != wantTotal {
-				t.Errorf("TotalAmount = %v, want %v", order.TotalAmount, wantTotal)
+			wantTotal := tt.items[0].UnitPriceCents * int64(tt.items[0].Quantity)
+			if order.TotalAmountCents != wantTotal {
+				t.Errorf("TotalAmountCents = %v, want %v", order.TotalAmountCents, wantTotal)
 			}
-			if order.Items[0].TotalPrice != wantTotal {
-				t.Errorf("item TotalPrice = %v, want %v", order.Items[0].TotalPrice, wantTotal)
+			if order.Items[0].TotalPriceCents != wantTotal {
+				t.Errorf("item TotalPriceCents = %v, want %v", order.Items[0].TotalPriceCents, wantTotal)
 			}
 		})
 	}

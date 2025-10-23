@@ -39,11 +39,11 @@ func NewOrdersHandler(repo OrderRepository, logger *zap.Logger) *OrdersHandler {
 }
 
 type createOrderItemRequest struct {
-	ProductID   string  `json:"product_id"`
-	ProductName string  `json:"product_name"`
-	ProductSKU  string  `json:"product_sku"`
-	Quantity    int     `json:"quantity"`
-	UnitPrice   float64 `json:"unit_price"`
+	ProductID      string `json:"product_id"`
+	ProductName    string `json:"product_name"`
+	ProductSKU     string `json:"product_sku"`
+	Quantity       int    `json:"quantity"`
+	UnitPriceCents int64  `json:"unit_price_cents"`
 }
 
 type createOrderRequest struct {
@@ -52,51 +52,51 @@ type createOrderRequest struct {
 }
 
 type orderItemResponse struct {
-	ID          string  `json:"id"`
-	ProductID   string  `json:"product_id"`
-	ProductName string  `json:"product_name"`
-	ProductSKU  string  `json:"product_sku,omitempty"`
-	Quantity    int     `json:"quantity"`
-	UnitPrice   float64 `json:"unit_price"`
-	TotalPrice  float64 `json:"total_price"`
+	ID              string `json:"id"`
+	ProductID       string `json:"product_id"`
+	ProductName     string `json:"product_name"`
+	ProductSKU      string `json:"product_sku,omitempty"`
+	Quantity        int    `json:"quantity"`
+	UnitPriceCents  int64  `json:"unit_price_cents"`
+	TotalPriceCents int64  `json:"total_price_cents"`
 }
 
 type orderResponse struct {
-	ID          string              `json:"id"`
-	CustomerID  string              `json:"customer_id"`
-	Status      string              `json:"status"`
-	TotalAmount float64             `json:"total_amount"`
-	Currency    string              `json:"currency"`
-	Items       []orderItemResponse `json:"items"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
-	Version     int                 `json:"version"`
+	ID               string              `json:"id"`
+	CustomerID       string              `json:"customer_id"`
+	Status           string              `json:"status"`
+	TotalAmountCents int64               `json:"total_amount_cents"`
+	Currency         string              `json:"currency"`
+	Items            []orderItemResponse `json:"items"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+	Version          int                 `json:"version"`
 }
 
 func newOrderResponse(o *domain.Order) orderResponse {
 	items := make([]orderItemResponse, len(o.Items))
 	for i, item := range o.Items {
 		items[i] = orderItemResponse{
-			ID:          item.ID.String(),
-			ProductID:   item.ProductID.String(),
-			ProductName: item.ProductName,
-			ProductSKU:  item.ProductSKU,
-			Quantity:    item.Quantity,
-			UnitPrice:   item.UnitPrice,
-			TotalPrice:  item.TotalPrice,
+			ID:              item.ID.String(),
+			ProductID:       item.ProductID.String(),
+			ProductName:     item.ProductName,
+			ProductSKU:      item.ProductSKU,
+			Quantity:        item.Quantity,
+			UnitPriceCents:  item.UnitPriceCents,
+			TotalPriceCents: item.TotalPriceCents,
 		}
 	}
 
 	return orderResponse{
-		ID:          o.ID.String(),
-		CustomerID:  o.CustomerID.String(),
-		Status:      string(o.Status),
-		TotalAmount: o.TotalAmount,
-		Currency:    o.Currency,
-		Items:       items,
-		CreatedAt:   o.CreatedAt,
-		UpdatedAt:   o.UpdatedAt,
-		Version:     o.Version,
+		ID:               o.ID.String(),
+		CustomerID:       o.CustomerID.String(),
+		Status:           string(o.Status),
+		TotalAmountCents: o.TotalAmountCents,
+		Currency:         o.Currency,
+		Items:            items,
+		CreatedAt:        o.CreatedAt,
+		UpdatedAt:        o.UpdatedAt,
+		Version:          o.Version,
 	}
 }
 
@@ -125,11 +125,11 @@ func (h *OrdersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items[i] = domain.OrderItem{
-			ProductID:   productID,
-			ProductName: item.ProductName,
-			ProductSKU:  item.ProductSKU,
-			Quantity:    item.Quantity,
-			UnitPrice:   item.UnitPrice,
+			ProductID:      productID,
+			ProductName:    item.ProductName,
+			ProductSKU:     item.ProductSKU,
+			Quantity:       item.Quantity,
+			UnitPriceCents: item.UnitPriceCents,
 		}
 	}
 
