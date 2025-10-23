@@ -65,6 +65,7 @@ func newTestMux(t *testing.T, repo OrderRepository) *http.ServeMux {
 	h := NewOrdersHandler(repo, zaptest.NewLogger(t))
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/orders", h.Create)
+	mux.HandleFunc("GET /api/v1/orders/{id}", h.Get)
 	return mux
 }
 
@@ -177,6 +178,91 @@ func TestOrdersHandler_Create(t *testing.T) {
 				}
 				if len(tt.repo.saved) != 1 {
 					t.Errorf("expected order to be saved, saved = %d", len(tt.repo.saved))
+				}
+				return
+			}
+
+			appErr := decodeAppError(t, w.Body.Bytes())
+			if appErr.Code != tt.wantCode {
+				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestOrdersHandler_Get(t *testing.T) {
+	owner := uuid.New()
+	other := uuid.New()
+	order := &domain.Order{
+		ID:          uuid.New(),
+		CustomerID:  owner,
+		Status:      domain.StatusPending,
+		TotalAmount: 19.98,
+		Currency:    "USD",
+	}
+
+	tests := []struct {
+		name       string
+		userID     string
+		orderID    string
+		repo       *fakeOrderRepository
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "order belongs to the caller",
+			userID:     owner.String(),
+			orderID:    order.ID.String(),
+			repo:       &fakeOrderRepository{ordersByID: map[uuid.UUID]*domain.Order{order.ID: order}},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "unknown order id",
+			userID:     owner.String(),
+			orderID:    uuid.New().String(),
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusNotFound,
+			wantCode:   "ORDER_NOT_FOUND",
+		},
+		{
+			name:       "invalid order id",
+			userID:     owner.String(),
+			orderID:    "not-a-uuid",
+			repo:       newFakeOrderRepository(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "order belongs to another customer",
+			userID:     other.String(),
+			orderID:    order.ID.String(),
+			repo:       &fakeOrderRepository{ordersByID: map[uuid.UUID]*domain.Order{order.ID: order}},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "FORBIDDEN",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := newTestMux(t, tt.repo)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+tt.orderID, nil)
+			req.Header.Set("X-User-ID", tt.userID)
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusOK {
+				var got orderResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if got.ID != order.ID.String() {
+					t.Errorf("ID = %v, want %v", got.ID, order.ID.String())
 				}
 				return
 			}

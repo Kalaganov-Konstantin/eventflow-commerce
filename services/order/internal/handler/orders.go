@@ -141,6 +141,34 @@ func (h *OrdersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusCreated, newOrderResponse(order))
 }
 
+// Get handles GET /api/v1/orders/{id}.
+func (h *OrdersHandler) Get(w http.ResponseWriter, r *http.Request) {
+	customerID, err := customerIDFromHeader(r)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	orderID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.writeError(w, apperrors.NewBadRequest("invalid order id"))
+		return
+	}
+
+	order, err := h.repo.GetByID(r.Context(), orderID)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	if order.CustomerID != customerID {
+		h.writeError(w, apperrors.NewForbidden("order does not belong to the current user"))
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, newOrderResponse(order))
+}
+
 func customerIDFromHeader(r *http.Request) (uuid.UUID, error) {
 	raw := r.Header.Get("X-User-ID")
 	if raw == "" {

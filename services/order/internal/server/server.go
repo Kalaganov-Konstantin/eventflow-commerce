@@ -50,6 +50,7 @@ func New(opts Options) *Server {
 	if opts.DB != nil {
 		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
+		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
 	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "order")
