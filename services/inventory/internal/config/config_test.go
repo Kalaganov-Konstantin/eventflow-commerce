@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 )
@@ -134,6 +135,18 @@ func TestLoadConfig(t *testing.T) {
 				}
 				if cfg.Logger.Level != "info" {
 					t.Errorf("LoadConfig() Logger.Level = %v, want info", cfg.Logger.Level)
+				}
+				if cfg.DatabaseURL != tt.envVars["INVENTORY_DATABASE_URL"] {
+					t.Errorf("LoadConfig() DatabaseURL = %v, want %v", cfg.DatabaseURL, tt.envVars["INVENTORY_DATABASE_URL"])
+				}
+				if cfg.DatabasePool.MaxOpenConns != 25 {
+					t.Errorf("LoadConfig() DatabasePool.MaxOpenConns = %v, want 25", cfg.DatabasePool.MaxOpenConns)
+				}
+				if cfg.DatabasePool.MaxIdleConns != 5 {
+					t.Errorf("LoadConfig() DatabasePool.MaxIdleConns = %v, want 5", cfg.DatabasePool.MaxIdleConns)
+				}
+				if cfg.DatabasePool.MaxLifetime != 5*time.Minute {
+					t.Errorf("LoadConfig() DatabasePool.MaxLifetime = %v, want 5m", cfg.DatabasePool.MaxLifetime)
 				}
 			}
 
