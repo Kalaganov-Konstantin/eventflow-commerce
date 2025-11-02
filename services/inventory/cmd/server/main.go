@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/server"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"go.uber.org/zap"
 )
@@ -38,9 +39,21 @@ func main() {
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", cfg.Service.Version))
 
+	db, err := database.NewPostgresConnection(database.PostgresConfig{
+		URL:          cfg.DatabaseURL,
+		MaxOpenConns: cfg.DatabasePool.MaxOpenConns,
+		MaxIdleConns: cfg.DatabasePool.MaxIdleConns,
+		MaxLifetime:  cfg.DatabasePool.MaxLifetime,
+	})
+	if err != nil {
+		appLogger.Fatal("Failed to connect to database", zap.Error(err))
+	}
+	defer func() { _ = db.Close() }()
+
 	srv := server.New(server.Options{
 		Config: cfg,
 		Logger: appLogger.Logger,
+		DB:     db,
 	})
 
 	done := make(chan os.Signal, 1)
