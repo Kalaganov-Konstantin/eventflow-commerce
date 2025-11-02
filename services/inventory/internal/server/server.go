@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/handler"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -45,17 +47,28 @@ func New(opts Options) *Server {
 	mux := http.NewServeMux()
 	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
 
+	if opts.DB != nil {
+		productsHandler := handler.NewProductsHandler(
+			repository.NewProductRepository(opts.DB.DB),
+			repository.NewStockRepository(opts.DB.DB),
+			opts.Logger,
+		)
+		mux.HandleFunc("GET /api/v1/products", productsHandler.List)
+		mux.HandleFunc("GET /api/v1/products/{id}", productsHandler.Get)
+		mux.HandleFunc("GET /api/v1/inventory/{product_id}", productsHandler.Inventory)
+	}
+
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "inventory")
 	chain := middleware.Chain(
 		middleware.Recovery(opts.Logger),
 		middleware.RequestID,
 		middleware.Logging(opts.Logger),
 	)
-	handler := chain(httpMetrics.Middleware(mux))
+	wrappedHandler := chain(httpMetrics.Middleware(mux))
 
 	outer := http.NewServeMux()
 	outer.Handle("/metrics", promhttp.Handler())
-	outer.Handle("/", handler)
+	outer.Handle("/", wrappedHandler)
 
 	runtime := httpserver.New(httpserver.Options{
 		Addr:    opts.Config.Server.Host + ":" + opts.Config.Server.Port,
