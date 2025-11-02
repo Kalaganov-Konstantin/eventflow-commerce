@@ -48,14 +48,20 @@ func New(opts Options) *Server {
 	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
 
 	if opts.DB != nil {
+		stockRepo := repository.NewStockRepository(opts.DB.DB)
+
 		productsHandler := handler.NewProductsHandler(
 			repository.NewProductRepository(opts.DB.DB),
-			repository.NewStockRepository(opts.DB.DB),
+			stockRepo,
 			opts.Logger,
 		)
 		mux.HandleFunc("GET /api/v1/products", productsHandler.List)
 		mux.HandleFunc("GET /api/v1/products/{id}", productsHandler.Get)
 		mux.HandleFunc("GET /api/v1/inventory/{product_id}", productsHandler.Inventory)
+
+		reservationsHandler := handler.NewReservationsHandler(stockRepo, opts.Logger)
+		mux.HandleFunc("POST /api/v1/inventory/reservations", reservationsHandler.Reserve)
+		mux.HandleFunc("DELETE /api/v1/inventory/reservations/{order_id}", reservationsHandler.Release)
 	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "inventory")
