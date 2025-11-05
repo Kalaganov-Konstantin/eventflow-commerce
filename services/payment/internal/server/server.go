@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
@@ -24,6 +25,7 @@ type Options struct {
 	Config  *config.Config
 	Logger  *zap.Logger
 	Metrics prometheus.Registerer
+	DB      *database.DB
 }
 
 // New builds the payment HTTP server: health checks, metrics and the shared middleware chain.
@@ -33,8 +35,15 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
+	var checks map[string]httpserver.Check
+	if opts.DB != nil {
+		checks = map[string]httpserver.Check{
+			"database": opts.DB.PingContext,
+		}
+	}
+
 	mux := http.NewServeMux()
-	httpserver.NewHealthHandlers(opts.Config.Service.Name, nil).Register(mux)
+	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "payment")
 	chain := middleware.Chain(
