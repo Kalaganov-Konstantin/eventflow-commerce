@@ -50,6 +50,10 @@ CREATE INDEX idx_payment_events_sequence ON payment_events(sequence_number);
 -- Composite index for event reconstruction
 CREATE INDEX idx_payment_events_aggregate_version ON payment_events(aggregate_id, event_version);
 
+-- Index to find the payment initiated for an order, used for idempotent payment creation
+CREATE INDEX idx_payment_events_initiated_order_id ON payment_events ((event_data ->> 'order_id'))
+    WHERE event_type = 'payment.initiated';
+
 -- Create indexes for snapshots
 CREATE INDEX idx_payment_snapshots_aggregate_id ON payment_snapshots(aggregate_id);
 CREATE INDEX idx_payment_snapshots_version ON payment_snapshots(aggregate_id, aggregate_version DESC);

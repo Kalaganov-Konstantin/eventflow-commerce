@@ -13,6 +13,7 @@ DROP INDEX IF EXISTS idx_payment_status_customer_id;
 DROP INDEX IF EXISTS idx_payment_snapshots_version;
 DROP INDEX IF EXISTS idx_payment_snapshots_aggregate_id;
 
+DROP INDEX IF EXISTS idx_payment_events_initiated_order_id;
 DROP INDEX IF EXISTS idx_payment_events_aggregate_version;
 DROP INDEX IF EXISTS idx_payment_events_sequence;
 DROP INDEX IF EXISTS idx_payment_events_occurred_at;
