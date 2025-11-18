@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	stderrors "errors"
+	"io"
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/domain"
@@ -13,9 +14,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultRefundReason = "customer_request"
+
 // PaymentProcessor is the command port the payments handler depends on.
 type PaymentProcessor interface {
 	ProcessPayment(ctx context.Context, orderID, customerID uuid.UUID, amountCents int64, currency string) (*domain.Payment, error)
+	RefundPayment(ctx context.Context, id uuid.UUID, reason string) (*domain.Payment, error)
 }
 
 // PaymentsHandler serves the payment HTTP endpoints.
@@ -87,6 +91,36 @@ func (h *PaymentsHandler) Process(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusCreated, newPaymentResponse(payment))
+}
+
+type refundPaymentRequest struct {
+	Reason string `json:"reason"`
+}
+
+// Refund handles POST /api/v1/payments/{id}/refund.
+func (h *PaymentsHandler) Refund(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.writeError(w, apperrors.NewBadRequest("invalid payment id"))
+		return
+	}
+
+	var req refundPaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !stderrors.Is(err, io.EOF) {
+		h.writeError(w, apperrors.NewBadRequest("invalid request body"))
+		return
+	}
+	if req.Reason == "" {
+		req.Reason = defaultRefundReason
+	}
+
+	payment, err := h.service.RefundPayment(r.Context(), id, req.Reason)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, newPaymentResponse(payment))
 }
 
 func customerIDFromHeader(r *http.Request) (uuid.UUID, error) {

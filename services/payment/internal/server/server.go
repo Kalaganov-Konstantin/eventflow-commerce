@@ -59,6 +59,7 @@ func New(opts Options) *Server {
 
 		paymentsHandler := handler.NewPaymentsHandler(paymentService, opts.Logger)
 		mux.HandleFunc("POST /api/v1/payments", paymentsHandler.Process)
+		mux.HandleFunc("POST /api/v1/payments/{id}/refund", paymentsHandler.Refund)
 	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "payment")

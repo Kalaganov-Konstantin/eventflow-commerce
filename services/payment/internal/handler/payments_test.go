@@ -25,6 +25,11 @@ type fakePaymentProcessor struct {
 	lastCustomer  uuid.UUID
 	lastAmount    int64
 	lastCurrency  string
+
+	refundResult *domain.Payment
+	refundErr    error
+	lastRefundID uuid.UUID
+	lastReason   string
 }
 
 func (f *fakePaymentProcessor) ProcessPayment(_ context.Context, orderID, customerID uuid.UUID, amountCents int64, currency string) (*domain.Payment, error) {
@@ -38,11 +43,21 @@ func (f *fakePaymentProcessor) ProcessPayment(_ context.Context, orderID, custom
 	return f.processResult, nil
 }
 
+func (f *fakePaymentProcessor) RefundPayment(_ context.Context, id uuid.UUID, reason string) (*domain.Payment, error) {
+	f.lastRefundID = id
+	f.lastReason = reason
+	if f.refundErr != nil {
+		return nil, f.refundErr
+	}
+	return f.refundResult, nil
+}
+
 func newTestMux(t *testing.T, processor PaymentProcessor) *http.ServeMux {
 	t.Helper()
 	h := NewPaymentsHandler(processor, zaptest.NewLogger(t))
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/payments", h.Process)
+	mux.HandleFunc("POST /api/v1/payments/{id}/refund", h.Refund)
 	return mux
 }
 
@@ -162,6 +177,116 @@ func TestPaymentsHandler_Process(t *testing.T) {
 				}
 				if tt.processor.lastAmount != 4999 {
 					t.Errorf("service received amount %d, want 4999", tt.processor.lastAmount)
+				}
+				return
+			}
+
+			appErr := decodeAppError(t, w.Body.Bytes())
+			if appErr.Code != tt.wantCode {
+				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestPaymentsHandler_Refund(t *testing.T) {
+	paymentID := uuid.New()
+	orderID := uuid.New()
+	customerID := uuid.New()
+
+	refunded, err := domain.Initiate(orderID, customerID, 4999, "USD")
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+	if err := refunded.Process("txn_1"); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if err := refunded.Refund("customer_request"); err != nil {
+		t.Fatalf("Refund: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		paymentID  string
+		body       string
+		processor  *fakePaymentProcessor
+		wantStatus int
+		wantCode   string
+		wantReason string
+	}{
+		{
+			name:       "refunds a completed payment",
+			paymentID:  paymentID.String(),
+			body:       `{"reason":"customer_request"}`,
+			processor:  &fakePaymentProcessor{refundResult: refunded},
+			wantStatus: http.StatusOK,
+			wantReason: "customer_request",
+		},
+		{
+			name:       "defaults the reason for an empty body",
+			paymentID:  paymentID.String(),
+			body:       "",
+			processor:  &fakePaymentProcessor{refundResult: refunded},
+			wantStatus: http.StatusOK,
+			wantReason: defaultRefundReason,
+		},
+		{
+			name:       "invalid payment id",
+			paymentID:  "not-a-uuid",
+			body:       "",
+			processor:  &fakePaymentProcessor{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "malformed JSON body",
+			paymentID:  paymentID.String(),
+			body:       `{`,
+			processor:  &fakePaymentProcessor{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "BAD_REQUEST",
+		},
+		{
+			name:       "payment not completed",
+			paymentID:  paymentID.String(),
+			body:       "",
+			processor:  &fakePaymentProcessor{refundErr: apperrors.NewConflict("payment is not completed")},
+			wantStatus: http.StatusConflict,
+			wantCode:   "CONFLICT",
+		},
+		{
+			name:       "unknown payment id",
+			paymentID:  paymentID.String(),
+			body:       "",
+			processor:  &fakePaymentProcessor{refundErr: apperrors.NewNotFound("payment")},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "NOT_FOUND",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := newTestMux(t, tt.processor)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/payments/"+tt.paymentID+"/refund", bytes.NewBufferString(tt.body))
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tt.wantStatus, w.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusOK {
+				var got paymentResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if got.Status != string(domain.StatusRefunded) {
+					t.Errorf("Status = %v, want %v", got.Status, domain.StatusRefunded)
+				}
+				if tt.processor.lastReason != tt.wantReason {
+					t.Errorf("reason = %q, want %q", tt.processor.lastReason, tt.wantReason)
 				}
 				return
 			}
