@@ -51,6 +51,24 @@ func (s *Store) Append(ctx context.Context, tx *sql.Tx, aggregateID uuid.UUID, e
 	return nil
 }
 
+// FindByOrderID returns the aggregate id of the payment initiated for orderID, or uuid.Nil if none
+// was ever initiated.
+func (s *Store) FindByOrderID(ctx context.Context, orderID uuid.UUID) (uuid.UUID, error) {
+	var aggregateID uuid.UUID
+	err := s.db.QueryRowContext(ctx, `
+		SELECT aggregate_id FROM payment_events
+		WHERE aggregate_type = 'payment' AND event_type = $1 AND event_data ->> 'order_id' = $2
+		LIMIT 1
+	`, domain.EventTypePaymentInitiated, orderID.String()).Scan(&aggregateID)
+	if stderrors.Is(err, sql.ErrNoRows) {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("select payment by order id: %w", err)
+	}
+	return aggregateID, nil
+}
+
 // Load returns every event recorded for aggregateID after fromVersion, ordered by version.
 func (s *Store) Load(ctx context.Context, aggregateID uuid.UUID, fromVersion int) ([]domain.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `

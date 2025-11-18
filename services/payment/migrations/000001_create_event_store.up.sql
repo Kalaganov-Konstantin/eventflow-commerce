@@ -28,7 +28,7 @@ CREATE TABLE payment_status (
     id UUID PRIMARY KEY,
     customer_id UUID NOT NULL,
     order_id UUID,
-    amount DECIMAL(12,2) NOT NULL,
+    amount_cents BIGINT NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     status VARCHAR(50) NOT NULL CHECK (status IN ('initiated', 'processing', 'completed', 'failed', 'refunded', 'cancelled')),
     payment_method VARCHAR(50),
@@ -50,6 +50,10 @@ CREATE INDEX idx_payment_events_sequence ON payment_events(sequence_number);
 -- Composite index for event reconstruction
 CREATE INDEX idx_payment_events_aggregate_version ON payment_events(aggregate_id, event_version);
 
+-- Index to find the payment initiated for an order, used for idempotent payment creation
+CREATE INDEX idx_payment_events_initiated_order_id ON payment_events ((event_data ->> 'order_id'))
+    WHERE event_type = 'payment.initiated';
+
 -- Create indexes for snapshots
 CREATE INDEX idx_payment_snapshots_aggregate_id ON payment_snapshots(aggregate_id);
 CREATE INDEX idx_payment_snapshots_version ON payment_snapshots(aggregate_id, aggregate_version DESC);
@@ -67,4 +71,4 @@ CREATE UNIQUE INDEX idx_payment_events_unique_version ON payment_events(aggregat
 CREATE UNIQUE INDEX idx_payment_snapshots_latest ON payment_snapshots(aggregate_id, aggregate_version DESC);
 
 -- Add constraint to ensure positive amounts
-ALTER TABLE payment_status ADD CONSTRAINT chk_positive_amount CHECK (amount >= 0);
+ALTER TABLE payment_status ADD CONSTRAINT chk_positive_amount CHECK (amount_cents >= 0);

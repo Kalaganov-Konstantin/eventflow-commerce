@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/domain"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/projection"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/google/uuid"
 )
@@ -15,11 +16,29 @@ type Repository struct {
 	db        *sql.DB
 	events    *Store
 	snapshots *SnapshotStore
+	status    *projection.PaymentStatus
 }
 
 // NewRepository builds a repository backed by the given database handle.
 func NewRepository(db *sql.DB) *Repository {
-	return &Repository{db: db, events: NewStore(db), snapshots: NewSnapshotStore(db)}
+	return &Repository{
+		db:        db,
+		events:    NewStore(db),
+		snapshots: NewSnapshotStore(db),
+		status:    projection.NewPaymentStatus(),
+	}
+}
+
+// FindByOrderID rebuilds the payment aggregate initiated for orderID, or returns nil if none exists.
+func (r *Repository) FindByOrderID(ctx context.Context, orderID uuid.UUID) (*domain.Payment, error) {
+	aggregateID, err := r.events.FindByOrderID(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if aggregateID == uuid.Nil {
+		return nil, nil
+	}
+	return r.Load(ctx, aggregateID)
 }
 
 // Load rebuilds a payment aggregate from its latest snapshot, if any, plus every event recorded since.
@@ -68,6 +87,12 @@ func (r *Repository) Save(ctx context.Context, payment *domain.Payment) error {
 
 	if err := r.events.Append(ctx, tx, payment.ID, expectedVersion, newEvents); err != nil {
 		return err
+	}
+
+	for _, event := range newEvents {
+		if err := r.status.Apply(ctx, tx, payment, event); err != nil {
+			return err
+		}
 	}
 
 	if payment.Version%SnapshotThreshold == 0 {

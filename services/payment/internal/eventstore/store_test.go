@@ -2,6 +2,7 @@ package eventstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -105,6 +106,72 @@ func TestStore_Append(t *testing.T) {
 
 		store := NewStore(db)
 		if err := store.Append(context.Background(), tx, aggregateID, 0, events); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+}
+
+func TestStore_FindByOrderID(t *testing.T) {
+	t.Run("returns the aggregate id for an initiated order", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		aggregateID := uuid.New()
+		rows := sqlmock.NewRows([]string{"aggregate_id"}).AddRow(aggregateID)
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnRows(rows)
+
+		store := NewStore(db)
+		got, err := store.FindByOrderID(context.Background(), orderID)
+		if err != nil {
+			t.Fatalf("FindByOrderID() error = %v", err)
+		}
+		if got != aggregateID {
+			t.Errorf("FindByOrderID() = %v, want %v", got, aggregateID)
+		}
+	})
+
+	t.Run("returns a nil uuid when no payment was initiated for the order", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnError(sql.ErrNoRows)
+
+		store := NewStore(db)
+		got, err := store.FindByOrderID(context.Background(), orderID)
+		if err != nil {
+			t.Fatalf("FindByOrderID() error = %v", err)
+		}
+		if got != uuid.Nil {
+			t.Errorf("FindByOrderID() = %v, want uuid.Nil", got)
+		}
+	})
+
+	t.Run("returns error on query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnError(errors.New("boom"))
+
+		store := NewStore(db)
+		if _, err := store.FindByOrderID(context.Background(), orderID); err == nil {
 			t.Fatal("expected error, got none")
 		}
 	})

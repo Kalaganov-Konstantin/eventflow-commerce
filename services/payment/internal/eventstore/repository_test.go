@@ -205,6 +205,7 @@ func TestRepository_Save(t *testing.T) {
 		mock.ExpectExec("INSERT INTO payment_events").
 			WithArgs(payment.ID, domain.EventTypePaymentInitiated, 1, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectCommit()
 
 		repo := NewRepository(db)
@@ -235,6 +236,7 @@ func TestRepository_Save(t *testing.T) {
 		mock.ExpectExec("INSERT INTO payment_events").
 			WithArgs(payment.ID, domain.EventTypePaymentProcessed, 10, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT INTO payment_snapshots").
 			WithArgs(payment.ID, 10, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -289,6 +291,101 @@ func TestRepository_Save(t *testing.T) {
 		}
 		if len(payment.PendingEvents()) == 0 {
 			t.Error("pending events should remain after a failed save")
+		}
+	})
+
+	t.Run("rolls back and keeps pending events when the read model upsert fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		payment, err := domain.Initiate(uuid.New(), uuid.New(), 100, "USD")
+		if err != nil {
+			t.Fatalf("Initiate: %v", err)
+		}
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO payment_events").
+			WithArgs(payment.ID, domain.EventTypePaymentInitiated, 1, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO payment_status").WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewRepository(db)
+		if err := repo.Save(context.Background(), payment); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if len(payment.PendingEvents()) == 0 {
+			t.Error("pending events should remain after a failed save")
+		}
+	})
+}
+
+func TestRepository_FindByOrderID(t *testing.T) {
+	t.Run("rebuilds the payment initiated for the order", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		aggregateID, events := buildHistory(t)
+		orderID := events[0].(*domain.PaymentInitiated).OrderID
+
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnRows(sqlmock.NewRows([]string{"aggregate_id"}).AddRow(aggregateID))
+		mock.ExpectQuery("FROM payment_snapshots").WithArgs(aggregateID).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery("FROM payment_events").WithArgs(aggregateID, 0).WillReturnRows(eventRows(t, events))
+
+		repo := NewRepository(db)
+		got, err := repo.FindByOrderID(context.Background(), orderID)
+		if err != nil {
+			t.Fatalf("FindByOrderID() error = %v", err)
+		}
+		if got == nil || got.ID != aggregateID {
+			t.Errorf("FindByOrderID() = %+v, want payment %v", got, aggregateID)
+		}
+	})
+
+	t.Run("returns nil when no payment was initiated for the order", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnError(sql.ErrNoRows)
+
+		repo := NewRepository(db)
+		got, err := repo.FindByOrderID(context.Background(), orderID)
+		if err != nil {
+			t.Fatalf("FindByOrderID() error = %v", err)
+		}
+		if got != nil {
+			t.Errorf("FindByOrderID() = %+v, want nil", got)
+		}
+	})
+
+	t.Run("propagates lookup errors", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		mock.ExpectQuery("FROM payment_events").
+			WithArgs(domain.EventTypePaymentInitiated, orderID.String()).
+			WillReturnError(errors.New("boom"))
+
+		repo := NewRepository(db)
+		if _, err := repo.FindByOrderID(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
 		}
 	})
 }

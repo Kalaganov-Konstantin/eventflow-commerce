@@ -6,6 +6,11 @@ import (
 	"net/http"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/eventstore"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/gateway"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/handler"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/repository"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -14,6 +19,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
+
+// paymentGatewayMaxAmountCents bounds what the stub payment gateway will approve, in cents.
+const paymentGatewayMaxAmountCents = 1_000_000
 
 // Server runs the payment HTTP API on the shared runtime.
 type Server struct {
@@ -44,6 +52,21 @@ func New(opts Options) *Server {
 
 	mux := http.NewServeMux()
 	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
+
+	if opts.DB != nil {
+		repo := eventstore.NewRepository(opts.DB.DB)
+		gatewayClient := gateway.NewStubClient(gateway.Config{MaxAmountCents: paymentGatewayMaxAmountCents})
+		paymentService := service.NewPaymentService(repo, gatewayClient)
+		statusReader := repository.NewPaymentStatusRepository(opts.DB.DB)
+		eventReader := eventstore.NewStore(opts.DB.DB)
+
+		paymentsHandler := handler.NewPaymentsHandler(paymentService, statusReader, eventReader, opts.Logger)
+		mux.HandleFunc("POST /api/v1/payments", paymentsHandler.Process)
+		mux.HandleFunc("POST /api/v1/payments/{id}/refund", paymentsHandler.Refund)
+		mux.HandleFunc("GET /api/v1/payments/{id}", paymentsHandler.Get)
+		mux.HandleFunc("GET /api/v1/payments", paymentsHandler.List)
+		mux.HandleFunc("GET /api/v1/payments/{id}/events", paymentsHandler.Events)
+	}
 
 	httpMetrics := metrics.NewHTTPMetrics(registerer, "payment")
 	chain := middleware.Chain(
