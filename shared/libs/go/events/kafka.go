@@ -29,14 +29,29 @@ type Event struct {
 	CorrelationID string                 `json:"correlationId,omitempty"`
 }
 
+// kafkaWriter is the subset of *kafka.Writer used for publishing, extracted so tests can
+// substitute a fake writer.
+type kafkaWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
+// kafkaReader is the subset of *kafka.Reader used by Subscriber, extracted so tests can
+// substitute a fake reader.
+type kafkaReader interface {
+	FetchMessage(ctx context.Context) (kafka.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
 type Publisher struct {
-	writer *kafka.Writer
+	writer kafkaWriter
 }
 
 type Subscriber struct {
-	reader    *kafka.Reader
+	reader    kafkaReader
 	logger    *zap.Logger
-	dlqWriter *kafka.Writer
+	dlqWriter kafkaWriter
 }
 
 func NewPublisher(config KafkaConfig) *Publisher {
@@ -110,45 +125,70 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 	return p.writer.WriteMessages(ctx, message)
 }
 
+// Subscribe fetches messages one at a time and only commits an offset after the message was
+// either handled successfully or safely handed off to the DLQ, so a handler failure combined
+// with an unavailable DLQ leaves the offset uncommitted for redelivery.
 func (s *Subscriber) Subscribe(ctx context.Context, handler func(Event) error) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			msg, err := s.reader.ReadMessage(ctx)
-			if err != nil {
-				s.logger.Error("Failed to read message from Kafka", zap.Error(err))
-				continue
+		msg, err := s.reader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
-			var event Event
-			if err := json.Unmarshal(msg.Value, &event); err != nil {
-				s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
-				s.sendToDLQ(ctx, msg, "unmarshal_error")
-				continue
-			}
-
-			if err := handler(event); err != nil {
-				s.logger.Error("Failed to handle event", zap.Error(err), zap.String("event_id", event.ID))
-				s.sendToDLQ(ctx, msg, "handler_error")
-				continue
-			}
+			s.logger.Error("Failed to fetch message from Kafka", zap.Error(err))
+			continue
 		}
+
+		s.processMessage(ctx, msg, handler)
 	}
 }
 
-func (s *Subscriber) sendToDLQ(ctx context.Context, msg kafka.Message, errorType string) {
+// processMessage unmarshals and handles a single fetched message, routing failures to the DLQ
+// and committing the offset only once the message has been safely dealt with.
+func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, handler func(Event) error) {
+	var event Event
+	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
+		s.handleFailure(ctx, msg, "unmarshal_error")
+		return
+	}
+
+	if err := handler(event); err != nil {
+		s.logger.Error("Failed to handle event", zap.Error(err), zap.String("event_id", event.ID))
+		s.handleFailure(ctx, msg, "handler_error")
+		return
+	}
+
+	s.commit(ctx, msg)
+}
+
+// handleFailure sends msg to the DLQ and only commits its offset once that write succeeds.
+func (s *Subscriber) handleFailure(ctx context.Context, msg kafka.Message, errorType string) {
+	if s.sendToDLQ(ctx, msg, errorType) {
+		s.commit(ctx, msg)
+	}
+}
+
+func (s *Subscriber) commit(ctx context.Context, msg kafka.Message) {
+	if err := s.reader.CommitMessages(ctx, msg); err != nil {
+		s.logger.Error("Failed to commit Kafka message offset", zap.Error(err), zap.ByteString("key", msg.Key))
+	}
+}
+
+// sendToDLQ writes msg to the configured DLQ topic and reports whether it succeeded.
+func (s *Subscriber) sendToDLQ(ctx context.Context, msg kafka.Message, errorType string) bool {
 	if s.dlqWriter == nil {
 		s.logger.Warn("DLQ topic not configured. Message will be dropped.", zap.ByteString("key", msg.Key))
-		return
+		return false
 	}
 
 	msg.Headers = append(msg.Headers, kafka.Header{Key: "errorType", Value: []byte(errorType)})
 
 	if err := s.dlqWriter.WriteMessages(ctx, msg); err != nil {
 		s.logger.Error("Failed to send message to DLQ", zap.Error(err), zap.ByteString("key", msg.Key))
+		return false
 	}
+	return true
 }
 
 func (p *Publisher) Close() error {
