@@ -54,6 +54,43 @@ func mustMarshalEvent(t *testing.T, event Event) []byte {
 	return data
 }
 
+func TestPublisher_Publish_KeysByAggregateIDWhenSet(t *testing.T) {
+	writer := &fakeWriter{}
+	pub := &Publisher{writer: writer}
+
+	err := pub.Publish(context.Background(), OrdersTopic, Event{
+		ID:          "evt-1",
+		AggregateID: "order-42",
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if len(writer.written) != 1 {
+		t.Fatalf("written = %d messages, want 1", len(writer.written))
+	}
+	if got := string(writer.written[0].Key); got != "order-42" {
+		t.Errorf("message key = %q, want %q", got, "order-42")
+	}
+}
+
+func TestPublisher_Publish_KeysByEventIDWhenAggregateIDUnset(t *testing.T) {
+	writer := &fakeWriter{}
+	pub := &Publisher{writer: writer}
+
+	err := pub.Publish(context.Background(), OrdersTopic, Event{ID: "evt-1"})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if len(writer.written) != 1 {
+		t.Fatalf("written = %d messages, want 1", len(writer.written))
+	}
+	if got := string(writer.written[0].Key); got != "evt-1" {
+		t.Errorf("message key = %q, want %q", got, "evt-1")
+	}
+}
+
 func TestSubscriber_ProcessMessage_CommitsAfterHandlerSuccess(t *testing.T) {
 	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}

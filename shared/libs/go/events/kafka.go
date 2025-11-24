@@ -35,6 +35,7 @@ type Event struct {
 	Timestamp     time.Time              `json:"timestamp"`
 	Version       string                 `json:"version"`
 	CorrelationID string                 `json:"correlationId,omitempty"`
+	AggregateID   string                 `json:"aggregateId,omitempty"`
 }
 
 // kafkaWriter is the subset of *kafka.Writer used for publishing, extracted so tests can
@@ -129,9 +130,16 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
+	// Partition by aggregate ID when known, so every event for the same aggregate lands in
+	// the same partition and is handled in order. Falls back to the event ID otherwise.
+	key := event.ID
+	if event.AggregateID != "" {
+		key = event.AggregateID
+	}
+
 	message := kafka.Message{
 		Topic: topic,
-		Key:   []byte(event.ID),
+		Key:   []byte(key),
 		Value: data,
 		Headers: []kafka.Header{
 			{Key: "eventType", Value: []byte(event.Type)},
