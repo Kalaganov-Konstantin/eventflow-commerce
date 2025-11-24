@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
@@ -103,6 +104,52 @@ func TestSubscriber_ProcessMessage_DoesNotCommitWhenDLQNotConfigured(t *testing.
 
 	if len(reader.committed) != 0 {
 		t.Fatalf("committed = %d messages, want 0 when handler fails and no DLQ is configured", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_RetriesBeforeGivingUp(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 3, retryBaseDelay: time.Millisecond}
+
+	var calls int
+	sub.processMessage(context.Background(), msg, func(Event) error {
+		calls++
+		if calls < 3 {
+			return errors.New("transient failure")
+		}
+		return nil
+	})
+
+	if calls != 3 {
+		t.Fatalf("handler called %d times, want 3", calls)
+	}
+	if len(dlq.written) != 0 {
+		t.Fatalf("DLQ written = %d messages, want 0 when the handler eventually succeeds", len(dlq.written))
+	}
+	if len(reader.committed) != 1 {
+		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_SendsToDLQAfterRetriesExhausted(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 2, retryBaseDelay: time.Millisecond}
+
+	var calls int
+	sub.processMessage(context.Background(), msg, func(Event) error {
+		calls++
+		return errors.New("permanent failure")
+	})
+
+	if calls != 3 { // initial attempt plus 2 retries
+		t.Fatalf("handler called %d times, want 3", calls)
+	}
+	if len(dlq.written) != 1 {
+		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
 	}
 }
 
