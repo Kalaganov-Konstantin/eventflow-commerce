@@ -1,6 +1,194 @@
 package events
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/segmentio/kafka-go"
+	"go.uber.org/zap"
+)
+
+// fakeReader is a substitute kafkaReader that serves a single preset message and records
+// which messages were committed.
+type fakeReader struct {
+	message   kafka.Message
+	committed []kafka.Message
+}
+
+func (f *fakeReader) FetchMessage(_ context.Context) (kafka.Message, error) {
+	return f.message, nil
+}
+
+func (f *fakeReader) CommitMessages(_ context.Context, msgs ...kafka.Message) error {
+	f.committed = append(f.committed, msgs...)
+	return nil
+}
+
+func (f *fakeReader) Close() error { return nil }
+
+// fakeWriter is a substitute kafkaWriter that either records written messages or fails.
+type fakeWriter struct {
+	written []kafka.Message
+	err     error
+}
+
+func (f *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.written = append(f.written, msgs...)
+	return nil
+}
+
+func (f *fakeWriter) Close() error { return nil }
+
+func mustMarshalEvent(t *testing.T, event Event) []byte {
+	t.Helper()
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("json.Marshal(event) error = %v", err)
+	}
+	return data
+}
+
+func TestPublisher_Publish_KeysByAggregateIDWhenSet(t *testing.T) {
+	writer := &fakeWriter{}
+	pub := &Publisher{writer: writer}
+
+	err := pub.Publish(context.Background(), OrdersTopic, Event{
+		ID:          "evt-1",
+		AggregateID: "order-42",
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if len(writer.written) != 1 {
+		t.Fatalf("written = %d messages, want 1", len(writer.written))
+	}
+	if got := string(writer.written[0].Key); got != "order-42" {
+		t.Errorf("message key = %q, want %q", got, "order-42")
+	}
+}
+
+func TestPublisher_Publish_KeysByEventIDWhenAggregateIDUnset(t *testing.T) {
+	writer := &fakeWriter{}
+	pub := &Publisher{writer: writer}
+
+	err := pub.Publish(context.Background(), OrdersTopic, Event{ID: "evt-1"})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if len(writer.written) != 1 {
+		t.Fatalf("written = %d messages, want 1", len(writer.written))
+	}
+	if got := string(writer.written[0].Key); got != "evt-1" {
+		t.Errorf("message key = %q, want %q", got, "evt-1")
+	}
+}
+
+func TestSubscriber_ProcessMessage_CommitsAfterHandlerSuccess(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
+
+	sub.processMessage(context.Background(), msg, func(Event) error { return nil })
+
+	if len(reader.committed) != 1 {
+		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_CommitsAfterSuccessfulDLQWrite(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
+
+	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+
+	if len(dlq.written) != 1 {
+		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
+	}
+	if len(reader.committed) != 1 {
+		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_DoesNotCommitWhenHandlerFailsAndDLQUnavailable(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{err: errors.New("dlq unreachable")}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
+
+	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+
+	if len(reader.committed) != 0 {
+		t.Fatalf("committed = %d messages, want 0 when handler fails and the DLQ is unavailable", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_DoesNotCommitWhenDLQNotConfigured(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
+
+	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+
+	if len(reader.committed) != 0 {
+		t.Fatalf("committed = %d messages, want 0 when handler fails and no DLQ is configured", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_RetriesBeforeGivingUp(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 3, retryBaseDelay: time.Millisecond}
+
+	var calls int
+	sub.processMessage(context.Background(), msg, func(Event) error {
+		calls++
+		if calls < 3 {
+			return errors.New("transient failure")
+		}
+		return nil
+	})
+
+	if calls != 3 {
+		t.Fatalf("handler called %d times, want 3", calls)
+	}
+	if len(dlq.written) != 0 {
+		t.Fatalf("DLQ written = %d messages, want 0 when the handler eventually succeeds", len(dlq.written))
+	}
+	if len(reader.committed) != 1 {
+		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
+	}
+}
+
+func TestSubscriber_ProcessMessage_SendsToDLQAfterRetriesExhausted(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 2, retryBaseDelay: time.Millisecond}
+
+	var calls int
+	sub.processMessage(context.Background(), msg, func(Event) error {
+		calls++
+		return errors.New("permanent failure")
+	})
+
+	if calls != 3 { // initial attempt plus 2 retries
+		t.Fatalf("handler called %d times, want 3", calls)
+	}
+	if len(dlq.written) != 1 {
+		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
+	}
+}
 
 func TestLoadKafkaConfig_MultipleBrokers(t *testing.T) {
 	t.Setenv("KAFKA_BROKERS", "a:9092,b:9092")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -13,10 +14,17 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultMaxRetries     = 3
+	defaultRetryBaseDelay = 100 * time.Millisecond
+)
+
 type KafkaConfig struct {
-	Brokers  []string `mapstructure:"KAFKA_BROKERS"`
-	GroupID  string   `mapstructure:"KAFKA_GROUP_ID"`
-	DLQTopic string   `mapstructure:"KAFKA_DLQ_TOPIC"`
+	Brokers        []string      `mapstructure:"KAFKA_BROKERS"`
+	GroupID        string        `mapstructure:"KAFKA_GROUP_ID"`
+	DLQTopic       string        `mapstructure:"KAFKA_DLQ_TOPIC"`
+	MaxRetries     int           `mapstructure:"KAFKA_MAX_RETRIES"`
+	RetryBaseDelay time.Duration `mapstructure:"KAFKA_RETRY_BASE_DELAY"`
 }
 
 type Event struct {
@@ -27,16 +35,34 @@ type Event struct {
 	Timestamp     time.Time              `json:"timestamp"`
 	Version       string                 `json:"version"`
 	CorrelationID string                 `json:"correlationId,omitempty"`
+	AggregateID   string                 `json:"aggregateId,omitempty"`
+}
+
+// kafkaWriter is the subset of *kafka.Writer used for publishing, extracted so tests can
+// substitute a fake writer.
+type kafkaWriter interface {
+	WriteMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
+}
+
+// kafkaReader is the subset of *kafka.Reader used by Subscriber, extracted so tests can
+// substitute a fake reader.
+type kafkaReader interface {
+	FetchMessage(ctx context.Context) (kafka.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+	Close() error
 }
 
 type Publisher struct {
-	writer *kafka.Writer
+	writer kafkaWriter
 }
 
 type Subscriber struct {
-	reader    *kafka.Reader
-	logger    *zap.Logger
-	dlqWriter *kafka.Writer
+	reader         kafkaReader
+	logger         *zap.Logger
+	dlqWriter      kafkaWriter
+	maxRetries     int
+	retryBaseDelay time.Duration
 }
 
 func NewPublisher(config KafkaConfig) *Publisher {
@@ -70,7 +96,22 @@ func NewSubscriber(config KafkaConfig, topic string, logger *zap.Logger) *Subscr
 		}
 	}
 
-	return &Subscriber{reader: reader, logger: logger, dlqWriter: dlqWriter}
+	maxRetries := config.MaxRetries
+	if maxRetries <= 0 {
+		maxRetries = defaultMaxRetries
+	}
+	retryBaseDelay := config.RetryBaseDelay
+	if retryBaseDelay <= 0 {
+		retryBaseDelay = defaultRetryBaseDelay
+	}
+
+	return &Subscriber{
+		reader:         reader,
+		logger:         logger,
+		dlqWriter:      dlqWriter,
+		maxRetries:     maxRetries,
+		retryBaseDelay: retryBaseDelay,
+	}
 }
 
 func (p *Publisher) Publish(ctx context.Context, topic string, event Event) error {
@@ -89,9 +130,16 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
+	// Partition by aggregate ID when known, so every event for the same aggregate lands in
+	// the same partition and is handled in order. Falls back to the event ID otherwise.
+	key := event.ID
+	if event.AggregateID != "" {
+		key = event.AggregateID
+	}
+
 	message := kafka.Message{
 		Topic: topic,
-		Key:   []byte(event.ID),
+		Key:   []byte(key),
 		Value: data,
 		Headers: []kafka.Header{
 			{Key: "eventType", Value: []byte(event.Type)},
@@ -110,45 +158,100 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 	return p.writer.WriteMessages(ctx, message)
 }
 
+// Subscribe fetches messages one at a time and only commits an offset after the message was
+// either handled successfully or safely handed off to the DLQ, so a handler failure combined
+// with an unavailable DLQ leaves the offset uncommitted for redelivery.
 func (s *Subscriber) Subscribe(ctx context.Context, handler func(Event) error) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			msg, err := s.reader.ReadMessage(ctx)
-			if err != nil {
-				s.logger.Error("Failed to read message from Kafka", zap.Error(err))
-				continue
+		msg, err := s.reader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-
-			var event Event
-			if err := json.Unmarshal(msg.Value, &event); err != nil {
-				s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
-				s.sendToDLQ(ctx, msg, "unmarshal_error")
-				continue
-			}
-
-			if err := handler(event); err != nil {
-				s.logger.Error("Failed to handle event", zap.Error(err), zap.String("event_id", event.ID))
-				s.sendToDLQ(ctx, msg, "handler_error")
-				continue
-			}
+			s.logger.Error("Failed to fetch message from Kafka", zap.Error(err))
+			continue
 		}
+
+		s.processMessage(ctx, msg, handler)
 	}
 }
 
-func (s *Subscriber) sendToDLQ(ctx context.Context, msg kafka.Message, errorType string) {
+// processMessage unmarshals and handles a single fetched message, routing failures to the DLQ
+// and committing the offset only once the message has been safely dealt with.
+func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, handler func(Event) error) {
+	var event Event
+	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
+		s.handleFailure(ctx, msg, "unmarshal_error")
+		return
+	}
+
+	if err := s.handleWithRetry(ctx, event, handler); err != nil {
+		s.logger.Error("Failed to handle event after retries", zap.Error(err), zap.String("event_id", event.ID))
+		s.handleFailure(ctx, msg, "handler_error")
+		return
+	}
+
+	s.commit(ctx, msg)
+}
+
+// handleWithRetry calls handler, retrying up to maxRetries times with exponential backoff and
+// jitter between attempts before giving up.
+func (s *Subscriber) handleWithRetry(ctx context.Context, event Event, handler func(Event) error) error {
+	err := handler(event)
+	for attempt := 1; err != nil && attempt <= s.maxRetries; attempt++ {
+		if waitErr := s.wait(ctx, s.retryDelay(attempt)); waitErr != nil {
+			return waitErr
+		}
+		err = handler(event)
+	}
+	return err
+}
+
+// retryDelay returns the exponential backoff delay for the given retry attempt (1-based),
+// plus up to 50% jitter.
+func (s *Subscriber) retryDelay(attempt int) time.Duration {
+	delay := s.retryBaseDelay << (attempt - 1)
+	jitter := time.Duration(rand.Int64N(int64(delay)/2 + 1))
+	return delay + jitter
+}
+
+func (s *Subscriber) wait(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// handleFailure sends msg to the DLQ and only commits its offset once that write succeeds.
+func (s *Subscriber) handleFailure(ctx context.Context, msg kafka.Message, errorType string) {
+	if s.sendToDLQ(ctx, msg, errorType) {
+		s.commit(ctx, msg)
+	}
+}
+
+func (s *Subscriber) commit(ctx context.Context, msg kafka.Message) {
+	if err := s.reader.CommitMessages(ctx, msg); err != nil {
+		s.logger.Error("Failed to commit Kafka message offset", zap.Error(err), zap.ByteString("key", msg.Key))
+	}
+}
+
+// sendToDLQ writes msg to the configured DLQ topic and reports whether it succeeded.
+func (s *Subscriber) sendToDLQ(ctx context.Context, msg kafka.Message, errorType string) bool {
 	if s.dlqWriter == nil {
 		s.logger.Warn("DLQ topic not configured. Message will be dropped.", zap.ByteString("key", msg.Key))
-		return
+		return false
 	}
 
 	msg.Headers = append(msg.Headers, kafka.Header{Key: "errorType", Value: []byte(errorType)})
 
 	if err := s.dlqWriter.WriteMessages(ctx, msg); err != nil {
 		s.logger.Error("Failed to send message to DLQ", zap.Error(err), zap.ByteString("key", msg.Key))
+		return false
 	}
+	return true
 }
 
 func (p *Publisher) Close() error {
@@ -169,6 +272,8 @@ func LoadKafkaConfig() (KafkaConfig, error) {
 	v.SetDefault("KAFKA_BROKERS", "localhost:9092")
 	v.SetDefault("KAFKA_GROUP_ID", "eventflow-service")
 	v.SetDefault("KAFKA_DLQ_TOPIC", "eventflow-dlq")
+	v.SetDefault("KAFKA_MAX_RETRIES", defaultMaxRetries)
+	v.SetDefault("KAFKA_RETRY_BASE_DELAY", defaultRetryBaseDelay)
 
 	if err := v.BindEnv("KAFKA_BROKERS"); err != nil {
 		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_BROKERS: %w", err)
@@ -178,6 +283,12 @@ func LoadKafkaConfig() (KafkaConfig, error) {
 	}
 	if err := v.BindEnv("KAFKA_DLQ_TOPIC"); err != nil {
 		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_DLQ_TOPIC: %w", err)
+	}
+	if err := v.BindEnv("KAFKA_MAX_RETRIES"); err != nil {
+		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_MAX_RETRIES: %w", err)
+	}
+	if err := v.BindEnv("KAFKA_RETRY_BASE_DELAY"); err != nil {
+		return KafkaConfig{}, fmt.Errorf("failed to bind KAFKA_RETRY_BASE_DELAY: %w", err)
 	}
 
 	var config KafkaConfig
