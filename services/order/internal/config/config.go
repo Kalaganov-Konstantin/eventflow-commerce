@@ -15,6 +15,12 @@ type DatabasePoolConfig struct {
 	MaxLifetime  time.Duration `mapstructure:"max_lifetime"`
 }
 
+// OutboxConfig sizes the outbox relay poll loop.
+type OutboxConfig struct {
+	RelayInterval  time.Duration `mapstructure:"relay_interval"`
+	RelayBatchSize int           `mapstructure:"relay_batch_size"`
+}
+
 type Config struct {
 	Server       config.ServerConfig   `mapstructure:"server"`
 	Database     config.DatabaseConfig `mapstructure:"database"`
@@ -24,6 +30,7 @@ type Config struct {
 	DatabaseURL string               `mapstructure:"-"`
 	Redis       config.RedisConfig   `mapstructure:"redis"`
 	Kafka       config.KafkaConfig   `mapstructure:"kafka"`
+	Outbox      OutboxConfig         `mapstructure:"outbox"`
 	Jaeger      config.JaegerConfig  `mapstructure:"jaeger"`
 	Logger      config.LoggerConfig  `mapstructure:"logger"`
 	Service     config.ServiceConfig `mapstructure:"service"`
@@ -44,6 +51,8 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("database_pool.max_open_conns", 25)
 	loader.SetDefault("database_pool.max_idle_conns", 5)
 	loader.SetDefault("database_pool.max_lifetime", "5m")
+	loader.SetDefault("outbox.relay_interval", "1s")
+	loader.SetDefault("outbox.relay_batch_size", 100)
 
 	// Explicitly bind environment variables
 	if err := loader.BindEnv("server.port", "ORDER_SERVER_PORT", "ORDER_SERVICE_PORT"); err != nil {
