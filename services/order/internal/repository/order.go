@@ -4,22 +4,26 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"github.com/google/uuid"
 )
 
 // OrderRepository stores and retrieves orders in postgres.
 type OrderRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	outbox *outbox.Store
 }
 
 // NewOrderRepository builds a repository backed by the given database handle.
 func NewOrderRepository(db *sql.DB) *OrderRepository {
-	return &OrderRepository{db: db}
+	return &OrderRepository{db: db, outbox: outbox.NewStore()}
 }
 
 // Save writes the order and its items in a single transaction.
@@ -50,10 +54,66 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		}
 	}
 
+	payload, err := json.Marshal(newOrderCreatedPayload(order))
+	if err != nil {
+		return fmt.Errorf("marshal order.created payload: %w", err)
+	}
+	if err := r.outbox.Enqueue(ctx, tx, outbox.Message{
+		Topic:       events.OrdersTopic,
+		EventType:   events.EventTypeOrderCreated,
+		AggregateID: order.ID.String(),
+		Payload:     payload,
+	}); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+// orderCreatedPayload is the order.created outbox payload. Money fields are integer minor units
+// (cents).
+type orderCreatedPayload struct {
+	OrderID          string                    `json:"order_id"`
+	CustomerID       string                    `json:"customer_id"`
+	Status           string                    `json:"status"`
+	TotalAmountCents int64                     `json:"total_amount_cents"`
+	Currency         string                    `json:"currency"`
+	Items            []orderCreatedItemPayload `json:"items"`
+}
+
+type orderCreatedItemPayload struct {
+	ProductID       string `json:"product_id"`
+	ProductName     string `json:"product_name"`
+	ProductSKU      string `json:"product_sku,omitempty"`
+	Quantity        int    `json:"quantity"`
+	UnitPriceCents  int64  `json:"unit_price_cents"`
+	TotalPriceCents int64  `json:"total_price_cents"`
+}
+
+func newOrderCreatedPayload(order *domain.Order) orderCreatedPayload {
+	items := make([]orderCreatedItemPayload, len(order.Items))
+	for i, item := range order.Items {
+		items[i] = orderCreatedItemPayload{
+			ProductID:       item.ProductID.String(),
+			ProductName:     item.ProductName,
+			ProductSKU:      item.ProductSKU,
+			Quantity:        item.Quantity,
+			UnitPriceCents:  item.UnitPriceCents,
+			TotalPriceCents: item.TotalPriceCents,
+		}
+	}
+
+	return orderCreatedPayload{
+		OrderID:          order.ID.String(),
+		CustomerID:       order.CustomerID.String(),
+		Status:           string(order.Status),
+		TotalAmountCents: order.TotalAmountCents,
+		Currency:         order.Currency,
+		Items:            items,
+	}
 }
 
 // GetByID assembles the full order aggregate, including its items.
@@ -106,9 +166,11 @@ func (r *OrderRepository) ListByCustomer(ctx context.Context, customerID uuid.UU
 	return orders, nil
 }
 
-// UpdateStatus transitions an order's status, using version as an optimistic lock.
-func (r *OrderRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.Status, expectedVersion int) error {
-	result, err := r.db.ExecContext(ctx, `
+// UpdateStatus transitions an order's status within tx, using version as an optimistic lock. The
+// caller owns the transaction, so the update can be combined with other writes, such as an
+// outbox message for the transition or an idempotency marker for the event that triggered it.
+func (r *OrderRepository) UpdateStatus(ctx context.Context, tx *sql.Tx, id uuid.UUID, status domain.Status, expectedVersion int) error {
+	result, err := tx.ExecContext(ctx, `
 		UPDATE orders SET status = $1, version = version + 1
 		WHERE id = $2 AND version = $3
 	`, string(status), id, expectedVersion)

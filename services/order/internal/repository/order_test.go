@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -58,6 +59,9 @@ func TestOrderRepository_Save(t *testing.T) {
 		mock.ExpectExec("INSERT INTO order_items").
 			WithArgs(order.Items[0].ID, order.ID, order.Items[0].ProductID, order.Items[0].ProductName,
 				order.Items[0].ProductSKU, order.Items[0].Quantity, order.Items[0].UnitPriceCents, order.Items[0].TotalPriceCents).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+			WithArgs(sqlmock.AnyArg(), "orders.events", "order.created", order.ID.String(), sqlmock.AnyArg(), nil).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
@@ -115,6 +119,30 @@ func TestOrderRepository_Save(t *testing.T) {
 		}
 	})
 
+	t.Run("rolls back when outbox insert fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder()
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO orders").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO order_items").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewOrderRepository(db)
+		if err := repo.Save(context.Background(), order); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("returns error when commit fails", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -127,6 +155,7 @@ func TestOrderRepository_Save(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO orders").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("INSERT INTO order_items").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit().WillReturnError(errors.New("boom"))
 
 		repo := NewOrderRepository(db)
@@ -287,13 +316,23 @@ func TestOrderRepository_UpdateStatus(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		id := uuid.New()
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE orders SET status").
 			WithArgs(string(domain.StatusConfirmed), id, 1).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
 
 		repo := NewOrderRepository(db)
-		if err := repo.UpdateStatus(context.Background(), id, domain.StatusConfirmed, 1); err != nil {
+		if err := repo.UpdateStatus(context.Background(), tx, id, domain.StatusConfirmed, 1); err != nil {
 			t.Fatalf("UpdateStatus() error = %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("tx.Commit() error = %v", err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)
@@ -308,18 +347,28 @@ func TestOrderRepository_UpdateStatus(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		id := uuid.New()
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE orders SET status").
 			WithArgs(string(domain.StatusConfirmed), id, 1).
 			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
 
 		repo := NewOrderRepository(db)
-		err = repo.UpdateStatus(context.Background(), id, domain.StatusConfirmed, 1)
+		err = repo.UpdateStatus(context.Background(), tx, id, domain.StatusConfirmed, 1)
 		if err == nil {
 			t.Fatal("expected error, got none")
 		}
 		var appErr *apperrors.AppError
 		if !errors.As(err, &appErr) || appErr.Code != "CONFLICT" {
 			t.Errorf("error = %v, want CONFLICT", err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
 		}
 	})
 
@@ -331,13 +380,23 @@ func TestOrderRepository_UpdateStatus(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		id := uuid.New()
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE orders SET status").
 			WithArgs(string(domain.StatusConfirmed), id, 1).
 			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
 
 		repo := NewOrderRepository(db)
-		if err := repo.UpdateStatus(context.Background(), id, domain.StatusConfirmed, 1); err == nil {
+		if err := repo.UpdateStatus(context.Background(), tx, id, domain.StatusConfirmed, 1); err == nil {
 			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
 		}
 	})
 }
