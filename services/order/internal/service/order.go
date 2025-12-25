@@ -40,24 +40,44 @@ func (s *OrderService) MarkPendingPayment(ctx context.Context, tx *sql.Tx, order
 	return s.applyTransition(ctx, tx, order, (*domain.Order).MarkPendingPayment, events.EventTypeOrderReadyForPayment)
 }
 
-// ConfirmPayment transitions order to confirmed and enqueues order.confirmed.
+// ConfirmPayment transitions order to confirmed and enqueues order.confirmed. An order that
+// already reached a terminal status is left untouched, since a redelivered or late payment event
+// is not an error.
 func (s *OrderService) ConfirmPayment(ctx context.Context, tx *sql.Tx, orderID uuid.UUID) error {
 	order, err := s.repo.GetByID(ctx, orderID)
 	if err != nil {
 		return err
+	}
+	if isTerminal(order.Status) {
+		return nil
 	}
 	return s.applyTransition(ctx, tx, order, (*domain.Order).Confirm, events.EventTypeOrderConfirmed)
 }
 
 // FailPayment transitions order to payment_failed and enqueues order.cancelled: the event catalog
 // has no dedicated payment-failed type, and downstream consumers treat the order the same way as
-// an explicit cancellation.
+// an explicit cancellation. An order that already reached a terminal status is left untouched,
+// since a redelivered or late payment event is not an error.
 func (s *OrderService) FailPayment(ctx context.Context, tx *sql.Tx, orderID uuid.UUID) error {
 	order, err := s.repo.GetByID(ctx, orderID)
 	if err != nil {
 		return err
 	}
+	if isTerminal(order.Status) {
+		return nil
+	}
 	return s.applyTransition(ctx, tx, order, (*domain.Order).Fail, events.EventTypeOrderCancelled)
+}
+
+// isTerminal reports whether status is an outcome a payment result would otherwise drive the
+// order to, so a redelivered or late event can be recognized and ignored.
+func isTerminal(status domain.Status) bool {
+	switch status {
+	case domain.StatusConfirmed, domain.StatusPaymentFailed, domain.StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // applyTransition runs apply on order, persists the resulting status and enqueues eventType, all

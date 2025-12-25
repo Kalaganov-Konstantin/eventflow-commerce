@@ -224,6 +224,43 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 			t.Errorf("unmet expectations: %v", err)
 		}
 	})
+
+	t.Run("ignores an order that already reached a terminal status", func(t *testing.T) {
+		for _, status := range []domain.Status{domain.StatusConfirmed, domain.StatusPaymentFailed, domain.StatusCancelled} {
+			t.Run(string(status), func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				if err != nil {
+					t.Fatalf("sqlmock.New() error = %v", err)
+				}
+				defer func() { _ = db.Close() }()
+
+				order := newTestOrder(status)
+				repo := &fakeRepository{order: order}
+				svc := NewOrderService(repo)
+
+				mock.ExpectBegin()
+				mock.ExpectCommit()
+
+				tx, err := db.Begin()
+				if err != nil {
+					t.Fatalf("db.Begin() error = %v", err)
+				}
+
+				if err := svc.ConfirmPayment(context.Background(), tx, order.ID); err != nil {
+					t.Fatalf("ConfirmPayment() error = %v", err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatalf("tx.Commit() error = %v", err)
+				}
+				if len(repo.updateCalls) != 0 {
+					t.Errorf("UpdateStatus calls = %v, want none", repo.updateCalls)
+				}
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Errorf("unmet expectations: %v", err)
+				}
+			})
+		}
+	})
 }
 
 func TestOrderService_FailPayment(t *testing.T) {
@@ -293,6 +330,43 @@ func TestOrderService_FailPayment(t *testing.T) {
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("ignores an order that already reached a terminal status", func(t *testing.T) {
+		for _, status := range []domain.Status{domain.StatusConfirmed, domain.StatusPaymentFailed, domain.StatusCancelled} {
+			t.Run(string(status), func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				if err != nil {
+					t.Fatalf("sqlmock.New() error = %v", err)
+				}
+				defer func() { _ = db.Close() }()
+
+				order := newTestOrder(status)
+				repo := &fakeRepository{order: order}
+				svc := NewOrderService(repo)
+
+				mock.ExpectBegin()
+				mock.ExpectCommit()
+
+				tx, err := db.Begin()
+				if err != nil {
+					t.Fatalf("db.Begin() error = %v", err)
+				}
+
+				if err := svc.FailPayment(context.Background(), tx, order.ID); err != nil {
+					t.Fatalf("FailPayment() error = %v", err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatalf("tx.Commit() error = %v", err)
+				}
+				if len(repo.updateCalls) != 0 {
+					t.Errorf("UpdateStatus calls = %v, want none", repo.updateCalls)
+				}
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Errorf("unmet expectations: %v", err)
+				}
+			})
 		}
 	})
 }
