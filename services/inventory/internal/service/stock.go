@@ -16,6 +16,7 @@ import (
 // Repository is the persistence port the stock service depends on.
 type Repository interface {
 	ReleaseInTx(ctx context.Context, tx *sql.Tx, orderID uuid.UUID) ([]domain.ReserveItem, error)
+	CommitInTx(ctx context.Context, tx *sql.Tx, orderID uuid.UUID) ([]domain.ReserveItem, error)
 }
 
 // StockService reacts to order lifecycle events by releasing or committing stock reservations,
@@ -36,6 +37,8 @@ func (s *StockService) HandleOrderEvent(ctx context.Context, tx *sql.Tx, eventTy
 	switch eventType {
 	case events.EventTypeOrderCancelled:
 		return s.releaseOrder(ctx, tx, orderID)
+	case events.EventTypeOrderConfirmed:
+		return s.commitOrder(ctx, tx, orderID)
 	default:
 		return nil
 	}
@@ -64,6 +67,14 @@ func (s *StockService) releaseOrder(ctx context.Context, tx *sql.Tx, orderID uui
 		AggregateID: orderID.String(),
 		Payload:     payload,
 	})
+}
+
+// commitOrder transitions every reserved item of orderID to committed, permanently removing it
+// from quantity_reserved. There is no dedicated event for a committed reservation. An order with
+// no active reservations is left untouched, so redelivery of order.confirmed changes nothing.
+func (s *StockService) commitOrder(ctx context.Context, tx *sql.Tx, orderID uuid.UUID) error {
+	_, err := s.repo.CommitInTx(ctx, tx, orderID)
+	return err
 }
 
 // inventoryEventPayload is the outbox payload for an inventory event driven by an order lifecycle
