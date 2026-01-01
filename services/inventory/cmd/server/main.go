@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	stderrors "errors"
 	"log"
 	"net/http"
 	"os"
@@ -10,9 +11,14 @@ import (
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/consumer"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/server"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"go.uber.org/zap"
 )
 
@@ -56,6 +62,26 @@ func main() {
 		DB:     db,
 	})
 
+	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.Start(context.Background())
+
+	stockService := service.NewStockService(repository.NewStockRepository(db.DB))
+	processedStore := events.NewProcessedStore(db.DB)
+	ordersSubscriber := events.NewSubscriber(events.KafkaConfig{
+		Brokers:  cfg.Kafka.Brokers,
+		GroupID:  cfg.Kafka.GroupID,
+		DLQTopic: events.DLQTopic(events.OrdersTopic),
+	}, events.OrdersTopic, appLogger.Logger)
+	ordersConsumer := consumer.NewOrdersConsumer(ordersSubscriber, db.DB, processedStore, stockService, appLogger.Logger)
+
+	consumerCtx, stopConsumer := context.WithCancel(context.Background())
+	go func() {
+		if err := ordersConsumer.Start(consumerCtx); err != nil && !stderrors.Is(err, context.Canceled) {
+			appLogger.Error("orders consumer stopped", zap.Error(err))
+		}
+	}()
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -75,5 +101,15 @@ func main() {
 		appLogger.Error("Server forced to shutdown", zap.Error(err))
 	} else {
 		appLogger.Info("Inventory service stopped gracefully")
+	}
+
+	stopConsumer()
+	if err := ordersSubscriber.Close(); err != nil {
+		appLogger.Error("Failed to close orders subscriber", zap.Error(err))
+	}
+
+	relay.Stop()
+	if err := publisher.Close(); err != nil {
+		appLogger.Error("Failed to close kafka publisher", zap.Error(err))
 	}
 }
