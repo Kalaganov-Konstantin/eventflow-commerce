@@ -12,7 +12,9 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/server"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"go.uber.org/zap"
 )
 
@@ -56,6 +58,10 @@ func main() {
 		DB:     db,
 	})
 
+	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.Start(context.Background())
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -75,5 +81,10 @@ func main() {
 		appLogger.Error("Server forced to shutdown", zap.Error(err))
 	} else {
 		appLogger.Info("Payment service stopped gracefully")
+	}
+
+	relay.Stop()
+	if err := publisher.Close(); err != nil {
+		appLogger.Error("Failed to close kafka publisher", zap.Error(err))
 	}
 }

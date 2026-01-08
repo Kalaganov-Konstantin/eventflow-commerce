@@ -148,6 +148,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.DatabasePool.MaxLifetime != 5*time.Minute {
 					t.Errorf("LoadConfig() DatabasePool.MaxLifetime = %v, want 5m", cfg.DatabasePool.MaxLifetime)
 				}
+				if cfg.Outbox.RelayInterval != time.Second {
+					t.Errorf("LoadConfig() Outbox.RelayInterval = %v, want 1s", cfg.Outbox.RelayInterval)
+				}
+				if cfg.Outbox.RelayBatchSize != 100 {
+					t.Errorf("LoadConfig() Outbox.RelayBatchSize = %v, want 100", cfg.Outbox.RelayBatchSize)
+				}
 			}
 
 			// Clean up
