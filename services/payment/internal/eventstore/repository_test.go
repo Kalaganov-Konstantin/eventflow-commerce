@@ -10,6 +10,7 @@ import (
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/domain"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	"github.com/google/uuid"
 )
 
@@ -206,6 +207,7 @@ func TestRepository_Save(t *testing.T) {
 			WithArgs(payment.ID, domain.EventTypePaymentInitiated, 1, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO outbox_messages").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectCommit()
 
 		repo := NewRepository(db)
@@ -214,6 +216,48 @@ func TestRepository_Save(t *testing.T) {
 		}
 		if len(payment.PendingEvents()) != 0 {
 			t.Errorf("len(PendingEvents()) = %d, want 0", len(payment.PendingEvents()))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("writes one outbox row per pending event", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		payment, err := domain.Initiate(uuid.New(), uuid.New(), 4999, "USD")
+		if err != nil {
+			t.Fatalf("Initiate: %v", err)
+		}
+		if err := payment.Process("txn_1"); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if err := payment.Refund("customer_request"); err != nil {
+			t.Fatalf("Refund: %v", err)
+		}
+		pendingEvents := payment.PendingEvents()
+
+		mock.ExpectBegin()
+		for range pendingEvents {
+			mock.ExpectExec("INSERT INTO payment_events").WillReturnResult(sqlmock.NewResult(1, 1))
+		}
+		for range pendingEvents {
+			mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
+		}
+		for range pendingEvents {
+			mock.ExpectExec("INSERT INTO outbox_messages").
+				WithArgs(sqlmock.AnyArg(), events.PaymentsTopic, sqlmock.AnyArg(), payment.ID.String(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(1, 1))
+		}
+		mock.ExpectCommit()
+
+		repo := NewRepository(db)
+		if err := repo.Save(context.Background(), payment); err != nil {
+			t.Fatalf("Save() error = %v", err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)
@@ -237,6 +281,7 @@ func TestRepository_Save(t *testing.T) {
 			WithArgs(payment.ID, domain.EventTypePaymentProcessed, 10, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO outbox_messages").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT INTO payment_snapshots").
 			WithArgs(payment.ID, 10, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
@@ -310,6 +355,34 @@ func TestRepository_Save(t *testing.T) {
 			WithArgs(payment.ID, domain.EventTypePaymentInitiated, 1, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("INSERT INTO payment_status").WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewRepository(db)
+		if err := repo.Save(context.Background(), payment); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if len(payment.PendingEvents()) == 0 {
+			t.Error("pending events should remain after a failed save")
+		}
+	})
+
+	t.Run("rolls back and keeps pending events when the outbox insert fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		payment, err := domain.Initiate(uuid.New(), uuid.New(), 100, "USD")
+		if err != nil {
+			t.Fatalf("Initiate: %v", err)
+		}
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO payment_events").
+			WithArgs(payment.ID, domain.EventTypePaymentInitiated, 1, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO payment_status").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectExec("INSERT INTO outbox_messages").WillReturnError(errors.New("boom"))
 		mock.ExpectRollback()
 
 		repo := NewRepository(db)

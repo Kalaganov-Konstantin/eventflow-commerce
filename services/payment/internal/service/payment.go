@@ -31,7 +31,8 @@ func NewPaymentService(repo Repository, gw gateway.Client) *PaymentService {
 
 // ProcessPayment initiates a payment for orderID and charges it through the gateway, applying Process
 // on approval or Fail on decline. A repeated call for an order that already has a payment returns the
-// existing payment instead of creating another one.
+// existing payment instead of creating another one, regardless of that payment's status, so a
+// redelivered order.ready_for_payment event never charges the gateway twice.
 func (s *PaymentService) ProcessPayment(ctx context.Context, orderID, customerID uuid.UUID, amountCents int64, currency string) (*domain.Payment, error) {
 	existing, err := s.repo.FindByOrderID(ctx, orderID)
 	if err != nil {

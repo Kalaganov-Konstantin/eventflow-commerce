@@ -3,11 +3,14 @@ package eventstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/domain"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/projection"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"github.com/google/uuid"
 )
 
@@ -17,6 +20,7 @@ type Repository struct {
 	events    *Store
 	snapshots *SnapshotStore
 	status    *projection.PaymentStatus
+	outbox    *outbox.Store
 }
 
 // NewRepository builds a repository backed by the given database handle.
@@ -26,6 +30,7 @@ func NewRepository(db *sql.DB) *Repository {
 		events:    NewStore(db),
 		snapshots: NewSnapshotStore(db),
 		status:    projection.NewPaymentStatus(),
+		outbox:    outbox.NewStore(),
 	}
 }
 
@@ -55,11 +60,11 @@ func (r *Repository) Load(ctx context.Context, id uuid.UUID) (*domain.Payment, e
 		fromVersion = snapshot.AggregateVersion
 	}
 
-	events, err := r.events.Load(ctx, id, fromVersion)
+	history, err := r.events.Load(ctx, id, fromVersion)
 	if err != nil {
 		return nil, err
 	}
-	for _, event := range events {
+	for _, event := range history {
 		payment.Apply(event)
 	}
 	payment.ClearPendingEvents()
@@ -95,6 +100,21 @@ func (r *Repository) Save(ctx context.Context, payment *domain.Payment) error {
 		}
 	}
 
+	for _, event := range newEvents {
+		payload, err := newOutboxPayload(payment, event)
+		if err != nil {
+			return err
+		}
+		if err := r.outbox.Enqueue(ctx, tx, outbox.Message{
+			Topic:       events.PaymentsTopic,
+			EventType:   event.EventType(),
+			AggregateID: payment.ID.String(),
+			Payload:     payload,
+		}); err != nil {
+			return err
+		}
+	}
+
 	if payment.Version%SnapshotThreshold == 0 {
 		if err := r.snapshots.SaveSnapshot(ctx, tx, payment); err != nil {
 			return err
@@ -106,4 +126,48 @@ func (r *Repository) Save(ctx context.Context, payment *domain.Payment) error {
 	}
 	payment.ClearPendingEvents()
 	return nil
+}
+
+// outboxPayload is the outbox payload for a payment event. It carries order_id on every event
+// type, including payment.processed and payment.failed, because the order service keys off it
+// rather than payment_id. Money fields are integer minor units (cents).
+type outboxPayload struct {
+	PaymentID     string `json:"payment_id"`
+	OrderID       string `json:"order_id"`
+	CustomerID    string `json:"customer_id"`
+	AmountCents   int64  `json:"amount_cents"`
+	Currency      string `json:"currency"`
+	Status        string `json:"status"`
+	TransactionID string `json:"transaction_id,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// newOutboxPayload builds the outbox payload for event, sourcing the aggregate-level fields from
+// payment (its post-Apply state) since not every domain event carries them itself.
+func newOutboxPayload(payment *domain.Payment, event domain.Event) ([]byte, error) {
+	payload := outboxPayload{
+		PaymentID:   payment.ID.String(),
+		OrderID:     payment.OrderID.String(),
+		CustomerID:  payment.CustomerID.String(),
+		AmountCents: payment.AmountCents,
+		Currency:    payment.Currency,
+		Status:      string(payment.Status),
+	}
+
+	switch e := event.(type) {
+	case *domain.PaymentProcessed:
+		payload.TransactionID = e.TransactionID
+	case *domain.PaymentFailed:
+		payload.Reason = e.Reason
+	case *domain.PaymentRefunded:
+		payload.Reason = e.Reason
+	case *domain.PaymentCancelled:
+		payload.Reason = e.Reason
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s outbox payload: %w", event.EventType(), err)
+	}
+	return data, nil
 }
