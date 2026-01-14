@@ -119,31 +119,53 @@ func TestPaymentService_ProcessPayment(t *testing.T) {
 	})
 
 	t.Run("returns the existing payment without charging again", func(t *testing.T) {
-		repo := newFakeRepository()
-		orderID, customerID := uuid.New(), uuid.New()
-		existing, err := domain.Initiate(orderID, customerID, 4999, "USD")
-		if err != nil {
-			t.Fatalf("Initiate: %v", err)
-		}
-		if err := repo.Save(context.Background(), existing); err != nil {
-			t.Fatalf("Save: %v", err)
+		// A redelivered order.ready_for_payment event calls ProcessPayment again for the same
+		// order regardless of how the first attempt ended, so the gateway must not be hit a
+		// second time whichever terminal status the existing payment is in.
+		statuses := []struct {
+			name   string
+			settle func(p *domain.Payment) error
+		}{
+			{"initiated", func(_ *domain.Payment) error { return nil }},
+			{"completed", func(p *domain.Payment) error { return p.Process("txn_1") }},
+			{"failed", func(p *domain.Payment) error { return p.Fail("insufficient_funds") }},
 		}
 
-		gw := &fakeGateway{result: gateway.Result{Approved: true, TransactionID: "txn_1"}}
-		svc := NewPaymentService(repo, gw)
+		for _, tt := range statuses {
+			t.Run(tt.name, func(t *testing.T) {
+				repo := newFakeRepository()
+				orderID, customerID := uuid.New(), uuid.New()
+				existing, err := domain.Initiate(orderID, customerID, 4999, "USD")
+				if err != nil {
+					t.Fatalf("Initiate: %v", err)
+				}
+				if err := tt.settle(existing); err != nil {
+					t.Fatalf("settle: %v", err)
+				}
+				if err := repo.Save(context.Background(), existing); err != nil {
+					t.Fatalf("Save: %v", err)
+				}
 
-		got, err := svc.ProcessPayment(context.Background(), orderID, customerID, 4999, "USD")
-		if err != nil {
-			t.Fatalf("ProcessPayment() error = %v", err)
-		}
-		if got.ID != existing.ID {
-			t.Errorf("ID = %v, want %v", got.ID, existing.ID)
-		}
-		if len(gw.calls) != 0 {
-			t.Errorf("gateway called %d times, want 0", len(gw.calls))
-		}
-		if len(repo.saved) != 1 {
-			t.Errorf("saved = %d payments, want 1 (no new payment created)", len(repo.saved))
+				gw := &fakeGateway{result: gateway.Result{Approved: true, TransactionID: "txn_2"}}
+				svc := NewPaymentService(repo, gw)
+
+				got, err := svc.ProcessPayment(context.Background(), orderID, customerID, 4999, "USD")
+				if err != nil {
+					t.Fatalf("ProcessPayment() error = %v", err)
+				}
+				if got.ID != existing.ID {
+					t.Errorf("ID = %v, want %v", got.ID, existing.ID)
+				}
+				if got.Status != existing.Status {
+					t.Errorf("Status = %v, want %v", got.Status, existing.Status)
+				}
+				if len(gw.calls) != 0 {
+					t.Errorf("gateway called %d times, want 0", len(gw.calls))
+				}
+				if len(repo.saved) != 1 {
+					t.Errorf("saved = %d payments, want 1 (no new payment created)", len(repo.saved))
+				}
+			})
 		}
 	})
 
