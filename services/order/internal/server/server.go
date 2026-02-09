@@ -51,7 +51,8 @@ func New(opts Options) *Server {
 
 	if opts.DB != nil {
 		inventoryClient := client.NewInventoryClient(opts.Config.InventoryServiceURL, opts.Config.InventoryClient.Timeout)
-		orderService := service.NewOrderService(repository.NewOrderRepository(opts.DB.DB), opts.DB.DB)
+		orderService := service.NewOrderService(
+			repository.NewOrderRepository(opts.DB.DB), opts.DB.DB, repository.NewSagaRepository(opts.DB.DB), inventoryClient)
 		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), inventoryClient, orderService, opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
 		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
