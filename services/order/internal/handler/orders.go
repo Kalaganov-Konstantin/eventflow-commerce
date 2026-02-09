@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/client"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/google/uuid"
@@ -27,15 +28,30 @@ type OrderRepository interface {
 	ListByCustomer(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*domain.Order, error)
 }
 
-// OrdersHandler serves the order HTTP endpoints.
-type OrdersHandler struct {
-	repo   OrderRepository
-	logger *zap.Logger
+// InventoryReserver is the port the orders handler uses to reserve stock before an order is
+// accepted.
+type InventoryReserver interface {
+	Reserve(ctx context.Context, orderID uuid.UUID, items []client.ReserveItem) error
+	Release(ctx context.Context, orderID uuid.UUID) error
 }
 
-// NewOrdersHandler builds an OrdersHandler backed by repo.
-func NewOrdersHandler(repo OrderRepository, logger *zap.Logger) *OrdersHandler {
-	return &OrdersHandler{repo: repo, logger: logger}
+// OrderTransitioner is the port the orders handler uses to move a freshly created order into
+// pending_payment once its stock is reserved.
+type OrderTransitioner interface {
+	MarkPendingPaymentAfterCreate(ctx context.Context, orderID uuid.UUID) error
+}
+
+// OrdersHandler serves the order HTTP endpoints.
+type OrdersHandler struct {
+	repo      OrderRepository
+	inventory InventoryReserver
+	orders    OrderTransitioner
+	logger    *zap.Logger
+}
+
+// NewOrdersHandler builds an OrdersHandler backed by repo, inventory and orders.
+func NewOrdersHandler(repo OrderRepository, inventory InventoryReserver, orders OrderTransitioner, logger *zap.Logger) *OrdersHandler {
+	return &OrdersHandler{repo: repo, inventory: inventory, orders: orders, logger: logger}
 }
 
 type createOrderItemRequest struct {
@@ -100,7 +116,15 @@ func newOrderResponse(o *domain.Order) orderResponse {
 	}
 }
 
-// Create handles POST /api/v1/orders.
+type createOrderResponse struct {
+	OrderID string `json:"order_id"`
+	Status  string `json:"status"`
+}
+
+// Create handles POST /api/v1/orders. It reserves stock for the order synchronously before
+// accepting it: a shortage answers 409 and creates nothing. Once stock is reserved, the order is
+// saved and moved to pending_payment, which enqueues order.ready_for_payment for the payment saga
+// to pick up, and the call returns 202 with the order id.
 func (h *OrdersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	customerID, err := customerIDFromHeader(r)
 	if err != nil {
@@ -139,12 +163,30 @@ func (h *OrdersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.repo.Save(r.Context(), order); err != nil {
+	reserveItems := make([]client.ReserveItem, len(order.Items))
+	for i, item := range order.Items {
+		reserveItems[i] = client.ReserveItem{ProductID: item.ProductID, Quantity: item.Quantity}
+	}
+	if err := h.inventory.Reserve(r.Context(), order.ID, reserveItems); err != nil {
 		h.writeError(w, err)
 		return
 	}
 
-	h.writeJSON(w, http.StatusCreated, newOrderResponse(order))
+	if err := h.repo.Save(r.Context(), order); err != nil {
+		if releaseErr := h.inventory.Release(r.Context(), order.ID); releaseErr != nil {
+			h.logger.Error("failed to release reservation for an order that was not saved",
+				zap.String("order_id", order.ID.String()), zap.Error(releaseErr))
+		}
+		h.writeError(w, err)
+		return
+	}
+
+	if err := h.orders.MarkPendingPaymentAfterCreate(r.Context(), order.ID); err != nil {
+		h.writeError(w, err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusAccepted, createOrderResponse{OrderID: order.ID.String(), Status: string(domain.StatusPendingPayment)})
 }
 
 // Get handles GET /api/v1/orders/{id}.

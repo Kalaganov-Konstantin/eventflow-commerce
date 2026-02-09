@@ -64,7 +64,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPending)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -104,7 +104,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusConfirmed)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -138,7 +138,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		repo := &fakeRepository{getErr: errTestRepository}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -160,6 +160,77 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 	})
 }
 
+func TestOrderService_MarkPendingPaymentAfterCreate(t *testing.T) {
+	t.Run("commits its own transaction", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder(domain.StatusPending)
+		repo := &fakeRepository{order: order}
+		svc := NewOrderService(repo, db)
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+			WithArgs(sqlmock.AnyArg(), "orders.events", "order.ready_for_payment", order.ID.String(), sqlmock.AnyArg(), nil).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		if err := svc.MarkPendingPaymentAfterCreate(context.Background(), order.ID); err != nil {
+			t.Fatalf("MarkPendingPaymentAfterCreate() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+		if len(repo.updateCalls) != 1 || repo.updateCalls[0].status != domain.StatusPendingPayment {
+			t.Errorf("UpdateStatus calls = %+v, want a single call to pending_payment", repo.updateCalls)
+		}
+	})
+
+	t.Run("propagates a begin transaction failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		repo := &fakeRepository{order: newTestOrder(domain.StatusPending)}
+		svc := NewOrderService(repo, db)
+
+		mock.ExpectBegin().WillReturnError(errTestRepository)
+
+		if err := svc.MarkPendingPaymentAfterCreate(context.Background(), uuid.New()); !errors.Is(err, errTestRepository) {
+			t.Errorf("error = %v, want %v", err, errTestRepository)
+		}
+	})
+
+	t.Run("rolls back on an invalid transition", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder(domain.StatusConfirmed)
+		repo := &fakeRepository{order: order}
+		svc := NewOrderService(repo, db)
+
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+
+		err = svc.MarkPendingPaymentAfterCreate(context.Background(), order.ID)
+		var appErr *apperrors.AppError
+		if !errors.As(err, &appErr) || appErr.Code != "ORDER_ALREADY_PROCESSED" {
+			t.Errorf("error = %v, want ORDER_ALREADY_PROCESSED", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+}
+
 func TestOrderService_ConfirmPayment(t *testing.T) {
 	t.Run("transitions to confirmed and enqueues order.confirmed", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -170,7 +241,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -203,7 +274,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).WillReturnError(errTestRepository)
@@ -236,7 +307,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 
 				order := newTestOrder(status)
 				repo := &fakeRepository{order: order}
-				svc := NewOrderService(repo)
+				svc := NewOrderService(repo, db)
 
 				mock.ExpectBegin()
 				mock.ExpectCommit()
@@ -273,7 +344,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -310,7 +381,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order, updateErr: apperrors.NewConflict("stale version")}
-		svc := NewOrderService(repo)
+		svc := NewOrderService(repo, db)
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -344,7 +415,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 
 				order := newTestOrder(status)
 				repo := &fakeRepository{order: order}
-				svc := NewOrderService(repo)
+				svc := NewOrderService(repo, db)
 
 				mock.ExpectBegin()
 				mock.ExpectCommit()

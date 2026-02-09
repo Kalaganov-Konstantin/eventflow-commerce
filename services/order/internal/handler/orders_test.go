@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/client"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/google/uuid"
@@ -64,9 +65,38 @@ func (f *fakeOrderRepository) ListByCustomer(_ context.Context, _ uuid.UUID, lim
 	return f.listResult, nil
 }
 
-func newTestMux(t *testing.T, repo OrderRepository) *http.ServeMux {
+// fakeInventoryReserver is an in-memory InventoryReserver test double.
+type fakeInventoryReserver struct {
+	reserveErr error
+	releaseErr error
+	reserved   []uuid.UUID
+	released   []uuid.UUID
+}
+
+func (f *fakeInventoryReserver) Reserve(_ context.Context, orderID uuid.UUID, _ []client.ReserveItem) error {
+	f.reserved = append(f.reserved, orderID)
+	return f.reserveErr
+}
+
+func (f *fakeInventoryReserver) Release(_ context.Context, orderID uuid.UUID) error {
+	f.released = append(f.released, orderID)
+	return f.releaseErr
+}
+
+// fakeOrderTransitioner is an in-memory OrderTransitioner test double.
+type fakeOrderTransitioner struct {
+	err   error
+	calls []uuid.UUID
+}
+
+func (f *fakeOrderTransitioner) MarkPendingPaymentAfterCreate(_ context.Context, orderID uuid.UUID) error {
+	f.calls = append(f.calls, orderID)
+	return f.err
+}
+
+func newTestMux(t *testing.T, repo OrderRepository, inventory InventoryReserver, orders OrderTransitioner) *http.ServeMux {
 	t.Helper()
-	h := NewOrdersHandler(repo, zaptest.NewLogger(t))
+	h := NewOrdersHandler(repo, inventory, orders, zaptest.NewLogger(t))
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/orders", h.Create)
 	mux.HandleFunc("GET /api/v1/orders/{id}", h.Get)
@@ -91,6 +121,8 @@ func TestOrdersHandler_Create(t *testing.T) {
 		userID     string
 		body       string
 		repo       *fakeOrderRepository
+		inventory  *fakeInventoryReserver
+		orders     *fakeOrderTransitioner
 		wantStatus int
 		wantCode   string
 	}{
@@ -99,13 +131,17 @@ func TestOrdersHandler_Create(t *testing.T) {
 			userID:     uuid.New().String(),
 			body:       validBody,
 			repo:       newFakeOrderRepository(),
-			wantStatus: http.StatusCreated,
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
+			wantStatus: http.StatusAccepted,
 		},
 		{
 			name:       "missing X-User-ID header",
 			userID:     "",
 			body:       validBody,
 			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "UNAUTHORIZED",
 		},
@@ -114,6 +150,8 @@ func TestOrdersHandler_Create(t *testing.T) {
 			userID:     "not-a-uuid",
 			body:       validBody,
 			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "UNAUTHORIZED",
 		},
@@ -122,6 +160,8 @@ func TestOrdersHandler_Create(t *testing.T) {
 			userID:     uuid.New().String(),
 			body:       `{`,
 			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST",
 		},
@@ -130,6 +170,8 @@ func TestOrdersHandler_Create(t *testing.T) {
 			userID:     uuid.New().String(),
 			body:       `{"items":[],"currency":"USD"}`,
 			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "VALIDATION_ERROR",
 		},
@@ -138,14 +180,38 @@ func TestOrdersHandler_Create(t *testing.T) {
 			userID:     uuid.New().String(),
 			body:       `{"items":[{"product_id":"not-a-uuid","product_name":"Widget","quantity":1,"unit_price_cents":100}],"currency":"USD"}`,
 			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "VALIDATION_ERROR",
 		},
 		{
-			name:       "repository failure",
+			name:       "insufficient inventory",
+			userID:     uuid.New().String(),
+			body:       validBody,
+			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{reserveErr: apperrors.NewInsufficientInventory(uuid.New().String(), 2, 1)},
+			orders:     &fakeOrderTransitioner{},
+			wantStatus: http.StatusConflict,
+			wantCode:   "INSUFFICIENT_INVENTORY",
+		},
+		{
+			name:       "repository failure releases the reservation",
 			userID:     uuid.New().String(),
 			body:       validBody,
 			repo:       &fakeOrderRepository{saveErr: errTestRepository},
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{},
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL_SERVER_ERROR",
+		},
+		{
+			name:       "saga transition failure",
+			userID:     uuid.New().String(),
+			body:       validBody,
+			repo:       newFakeOrderRepository(),
+			inventory:  &fakeInventoryReserver{},
+			orders:     &fakeOrderTransitioner{err: errTestRepository},
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL_SERVER_ERROR",
 		},
@@ -153,7 +219,7 @@ func TestOrdersHandler_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux := newTestMux(t, tt.repo)
+			mux := newTestMux(t, tt.repo, tt.inventory, tt.orders)
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBufferString(tt.body))
 			if tt.userID != "" {
@@ -167,22 +233,25 @@ func TestOrdersHandler_Create(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body=%s)", w.Code, tt.wantStatus, w.Body.String())
 			}
 
-			if tt.wantStatus == http.StatusCreated {
-				var got orderResponse
+			if tt.wantStatus == http.StatusAccepted {
+				var got createOrderResponse
 				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to decode response: %v", err)
 				}
-				if got.CustomerID != tt.userID {
-					t.Errorf("CustomerID = %v, want %v", got.CustomerID, tt.userID)
+				if got.OrderID == "" {
+					t.Error("OrderID was empty")
 				}
-				if got.Status != string(domain.StatusPending) {
-					t.Errorf("Status = %v, want %v", got.Status, domain.StatusPending)
-				}
-				if got.TotalAmountCents != 1998 {
-					t.Errorf("TotalAmountCents = %v, want 1998", got.TotalAmountCents)
+				if got.Status != string(domain.StatusPendingPayment) {
+					t.Errorf("Status = %v, want %v", got.Status, domain.StatusPendingPayment)
 				}
 				if len(tt.repo.saved) != 1 {
 					t.Errorf("expected order to be saved, saved = %d", len(tt.repo.saved))
+				}
+				if len(tt.inventory.reserved) != 1 {
+					t.Errorf("expected stock to be reserved, reserved = %d", len(tt.inventory.reserved))
+				}
+				if len(tt.orders.calls) != 1 {
+					t.Errorf("expected the order to be marked pending_payment, calls = %d", len(tt.orders.calls))
 				}
 				return
 			}
@@ -190,6 +259,13 @@ func TestOrdersHandler_Create(t *testing.T) {
 			appErr := decodeAppError(t, w.Body.Bytes())
 			if appErr.Code != tt.wantCode {
 				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
+			}
+
+			if tt.name == "insufficient inventory" && len(tt.repo.saved) != 0 {
+				t.Errorf("order should not be saved when stock is insufficient, saved = %d", len(tt.repo.saved))
+			}
+			if tt.name == "repository failure releases the reservation" && len(tt.inventory.released) != 1 {
+				t.Errorf("expected the reservation to be released, released = %d", len(tt.inventory.released))
 			}
 		})
 	}
@@ -249,7 +325,7 @@ func TestOrdersHandler_Get(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux := newTestMux(t, tt.repo)
+			mux := newTestMux(t, tt.repo, &fakeInventoryReserver{}, &fakeOrderTransitioner{})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+tt.orderID, nil)
 			req.Header.Set("X-User-ID", tt.userID)
@@ -329,7 +405,7 @@ func TestOrdersHandler_List(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &fakeOrderRepository{listResult: []*domain.Order{sampleOrder}}
-			mux := newTestMux(t, repo)
+			mux := newTestMux(t, repo, &fakeInventoryReserver{}, &fakeOrderTransitioner{})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders"+tt.query, nil)
 			req.Header.Set("X-User-ID", uuid.New().String())

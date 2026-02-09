@@ -23,12 +23,30 @@ type Repository interface {
 // outbox, within a transaction supplied by the caller so it can be combined with other writes.
 type OrderService struct {
 	repo   Repository
+	db     *sql.DB
 	outbox *outbox.Store
 }
 
-// NewOrderService builds an OrderService backed by repo.
-func NewOrderService(repo Repository) *OrderService {
-	return &OrderService{repo: repo, outbox: outbox.NewStore()}
+// NewOrderService builds an OrderService backed by repo. db is used only for transitions that have
+// no caller-supplied transaction to join, such as MarkPendingPaymentAfterCreate.
+func NewOrderService(repo Repository, db *sql.DB) *OrderService {
+	return &OrderService{repo: repo, db: db, outbox: outbox.NewStore()}
+}
+
+// MarkPendingPaymentAfterCreate transitions order to pending_payment and enqueues
+// order.ready_for_payment in its own transaction. It is used by the create-order handler, which
+// persists the order separately through OrderRepository.Save and has no transaction to join.
+func (s *OrderService) MarkPendingPaymentAfterCreate(ctx context.Context, orderID uuid.UUID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := s.MarkPendingPayment(ctx, tx, orderID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MarkPendingPayment transitions order to pending_payment and enqueues order.ready_for_payment.

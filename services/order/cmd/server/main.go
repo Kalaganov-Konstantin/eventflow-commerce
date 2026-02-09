@@ -66,7 +66,7 @@ func main() {
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
 	relay.Start(context.Background())
 
-	orderService := service.NewOrderService(repository.NewOrderRepository(db.DB))
+	orderService := service.NewOrderService(repository.NewOrderRepository(db.DB), db.DB)
 	processedStore := events.NewProcessedStore(db.DB)
 	paymentsSubscriber := events.NewSubscriber(events.KafkaConfig{
 		Brokers:  cfg.Kafka.Brokers,

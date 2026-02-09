@@ -19,22 +19,24 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Valid configuration",
 			envVars: map[string]string{
-				"ORDER_SERVER_PORT":  "8080",
-				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
-				"REDIS_URL":          "redis://localhost:6379",
-				"KAFKA_BROKERS":      "localhost:9092",
-				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+				"ORDER_SERVER_PORT":     "8080",
+				"ORDER_DATABASE_URL":    "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"REDIS_URL":             "redis://localhost:6379",
+				"KAFKA_BROKERS":         "localhost:9092",
+				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
+				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
 			},
 			wantErr: false,
 		},
 		{
 			name: "ORDER_SERVICE_PORT still works as fallback",
 			envVars: map[string]string{
-				"ORDER_SERVICE_PORT": "8080",
-				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
-				"REDIS_URL":          "redis://localhost:6379",
-				"KAFKA_BROKERS":      "localhost:9092",
-				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+				"ORDER_SERVICE_PORT":    "8080",
+				"ORDER_DATABASE_URL":    "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"REDIS_URL":             "redis://localhost:6379",
+				"KAFKA_BROKERS":         "localhost:9092",
+				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
+				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
 			},
 			wantErr: false,
 		},
@@ -63,11 +65,12 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Invalid database URL",
 			envVars: map[string]string{
-				"ORDER_SERVER_PORT":  "8080",
-				"ORDER_DATABASE_URL": "invalid-url",
-				"REDIS_URL":          "redis://localhost:6379",
-				"KAFKA_BROKERS":      "localhost:9092",
-				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+				"ORDER_SERVER_PORT":     "8080",
+				"ORDER_DATABASE_URL":    "invalid-url",
+				"REDIS_URL":             "redis://localhost:6379",
+				"KAFKA_BROKERS":         "localhost:9092",
+				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
+				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
 			},
 			wantErr: true,
 			errMsg:  "database host is required",
@@ -82,6 +85,18 @@ func TestLoadConfig(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "REDIS_URL environment variable is not set",
+		},
+		{
+			name: "Missing INVENTORY_SERVICE_URL",
+			envVars: map[string]string{
+				"ORDER_SERVER_PORT":  "8080",
+				"ORDER_DATABASE_URL": "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"REDIS_URL":          "redis://localhost:6379",
+				"KAFKA_BROKERS":      "localhost:9092",
+				"JAEGER_ENDPOINT":    "http://localhost:14268/api/traces",
+			},
+			wantErr: true,
+			errMsg:  "INVENTORY_SERVICE_URL environment variable is not set",
 		},
 	}
 
@@ -154,6 +169,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.Outbox.RelayBatchSize != 100 {
 					t.Errorf("LoadConfig() Outbox.RelayBatchSize = %v, want 100", cfg.Outbox.RelayBatchSize)
 				}
+				if cfg.InventoryServiceURL != tt.envVars["INVENTORY_SERVICE_URL"] {
+					t.Errorf("LoadConfig() InventoryServiceURL = %v, want %v", cfg.InventoryServiceURL, tt.envVars["INVENTORY_SERVICE_URL"])
+				}
+				if cfg.InventoryClient.Timeout != 5*time.Second {
+					t.Errorf("LoadConfig() InventoryClient.Timeout = %v, want 5s", cfg.InventoryClient.Timeout)
+				}
 			}
 
 			// Clean up
@@ -193,6 +214,7 @@ func TestValidate(t *testing.T) {
 				Jaeger: config.JaegerConfig{
 					Endpoint: "http://localhost:14268/api/traces",
 				},
+				InventoryServiceURL: "http://inventory:8080",
 			},
 			wantErr: false,
 		},
@@ -241,6 +263,7 @@ func clearEnvVars() {
 		"KAFKA_BROKERS",
 		"ORDER_KAFKA_GROUP_ID",
 		"JAEGER_ENDPOINT",
+		"INVENTORY_SERVICE_URL",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)

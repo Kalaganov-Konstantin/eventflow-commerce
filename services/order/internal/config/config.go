@@ -21,19 +21,26 @@ type OutboxConfig struct {
 	RelayBatchSize int           `mapstructure:"relay_batch_size"`
 }
 
+// InventoryClientConfig controls the HTTP client used to reserve and release stock synchronously.
+type InventoryClientConfig struct {
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
 type Config struct {
 	Server       config.ServerConfig   `mapstructure:"server"`
 	Database     config.DatabaseConfig `mapstructure:"database"`
 	DatabasePool DatabasePoolConfig    `mapstructure:"database_pool"`
 	// DatabaseURL is the raw connection string used to open the pool; Database
 	// above holds the same information split into fields for validation.
-	DatabaseURL string               `mapstructure:"-"`
-	Redis       config.RedisConfig   `mapstructure:"redis"`
-	Kafka       config.KafkaConfig   `mapstructure:"kafka"`
-	Outbox      OutboxConfig         `mapstructure:"outbox"`
-	Jaeger      config.JaegerConfig  `mapstructure:"jaeger"`
-	Logger      config.LoggerConfig  `mapstructure:"logger"`
-	Service     config.ServiceConfig `mapstructure:"service"`
+	DatabaseURL         string                `mapstructure:"-"`
+	Redis               config.RedisConfig    `mapstructure:"redis"`
+	Kafka               config.KafkaConfig    `mapstructure:"kafka"`
+	Outbox              OutboxConfig          `mapstructure:"outbox"`
+	Jaeger              config.JaegerConfig   `mapstructure:"jaeger"`
+	Logger              config.LoggerConfig   `mapstructure:"logger"`
+	Service             config.ServiceConfig  `mapstructure:"service"`
+	InventoryServiceURL string                `mapstructure:"inventory_service_url"`
+	InventoryClient     InventoryClientConfig `mapstructure:"inventory_client"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -53,6 +60,7 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("database_pool.max_lifetime", "5m")
 	loader.SetDefault("outbox.relay_interval", "1s")
 	loader.SetDefault("outbox.relay_batch_size", 100)
+	loader.SetDefault("inventory_client.timeout", "5s")
 
 	// Explicitly bind environment variables
 	if err := loader.BindEnv("server.port", "ORDER_SERVER_PORT", "ORDER_SERVICE_PORT"); err != nil {
@@ -72,6 +80,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if err := loader.BindEnv("jaeger.endpoint", "JAEGER_ENDPOINT"); err != nil {
 		return nil, fmt.Errorf("failed to bind jaeger.endpoint: %w", err)
+	}
+	if err := loader.BindEnv("inventory_service_url", "INVENTORY_SERVICE_URL"); err != nil {
+		return nil, fmt.Errorf("failed to bind inventory_service_url: %w", err)
 	}
 
 	err := loader.Load(&cfg)
@@ -126,6 +137,11 @@ func (c *Config) Validate() error {
 	// Validation for Jaeger
 	if c.Jaeger.Endpoint == "" {
 		return fmt.Errorf("JAEGER_ENDPOINT environment variable is not set")
+	}
+
+	// Validation for the inventory client
+	if c.InventoryServiceURL == "" {
+		return fmt.Errorf("INVENTORY_SERVICE_URL environment variable is not set")
 	}
 
 	// Final validation of database fields after parsing (which happens in LoadConfig)
