@@ -63,6 +63,8 @@ services:
       - REDIS_URL=${REDIS_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
       - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - INVENTORY_SERVICE_URL=${INVENTORY_SERVICE_URL}
+      - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL}
     depends_on:
       postgres:
         condition: service_healthy

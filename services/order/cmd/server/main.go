@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/client"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/consumer"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
@@ -66,7 +67,10 @@ func main() {
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
 	relay.Start(context.Background())
 
-	orderService := service.NewOrderService(repository.NewOrderRepository(db.DB))
+	inventoryClient := client.NewInventoryClient(cfg.InventoryServiceURL, cfg.InventoryClient.Timeout)
+	paymentClient := client.NewPaymentClient(cfg.PaymentServiceURL, cfg.PaymentClient.Timeout)
+	orderService := service.NewOrderService(
+		repository.NewOrderRepository(db.DB), db.DB, repository.NewSagaRepository(db.DB), inventoryClient, paymentClient)
 	processedStore := events.NewProcessedStore(db.DB)
 	paymentsSubscriber := events.NewSubscriber(events.KafkaConfig{
 		Brokers:  cfg.Kafka.Brokers,

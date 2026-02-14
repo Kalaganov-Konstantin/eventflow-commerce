@@ -5,9 +5,11 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/client"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/handler"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -48,7 +50,11 @@ func New(opts Options) *Server {
 	httpserver.NewHealthHandlers(opts.Config.Service.Name, checks).Register(mux)
 
 	if opts.DB != nil {
-		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), opts.Logger)
+		inventoryClient := client.NewInventoryClient(opts.Config.InventoryServiceURL, opts.Config.InventoryClient.Timeout)
+		paymentClient := client.NewPaymentClient(opts.Config.PaymentServiceURL, opts.Config.PaymentClient.Timeout)
+		orderService := service.NewOrderService(
+			repository.NewOrderRepository(opts.DB.DB), opts.DB.DB, repository.NewSagaRepository(opts.DB.DB), inventoryClient, paymentClient)
+		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), inventoryClient, orderService, opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
 		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
 		mux.HandleFunc("GET /api/v1/orders", ordersHandler.List)
