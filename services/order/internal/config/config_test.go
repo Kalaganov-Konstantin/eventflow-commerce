@@ -25,6 +25,7 @@ func TestLoadConfig(t *testing.T) {
 				"KAFKA_BROKERS":         "localhost:9092",
 				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
 				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
+				"PAYMENT_SERVICE_URL":   "http://payment-service:8082",
 			},
 			wantErr: false,
 		},
@@ -37,6 +38,7 @@ func TestLoadConfig(t *testing.T) {
 				"KAFKA_BROKERS":         "localhost:9092",
 				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
 				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
+				"PAYMENT_SERVICE_URL":   "http://payment-service:8082",
 			},
 			wantErr: false,
 		},
@@ -71,6 +73,7 @@ func TestLoadConfig(t *testing.T) {
 				"KAFKA_BROKERS":         "localhost:9092",
 				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
 				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
+				"PAYMENT_SERVICE_URL":   "http://payment-service:8082",
 			},
 			wantErr: true,
 			errMsg:  "database host is required",
@@ -97,6 +100,19 @@ func TestLoadConfig(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "INVENTORY_SERVICE_URL environment variable is not set",
+		},
+		{
+			name: "Missing PAYMENT_SERVICE_URL",
+			envVars: map[string]string{
+				"ORDER_SERVER_PORT":     "8080",
+				"ORDER_DATABASE_URL":    "postgres://user:pass@localhost:5432/order?sslmode=disable",
+				"REDIS_URL":             "redis://localhost:6379",
+				"KAFKA_BROKERS":         "localhost:9092",
+				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
+				"INVENTORY_SERVICE_URL": "http://inventory-service:8083",
+			},
+			wantErr: true,
+			errMsg:  "PAYMENT_SERVICE_URL environment variable is not set",
 		},
 	}
 
@@ -175,6 +191,12 @@ func TestLoadConfig(t *testing.T) {
 				if cfg.InventoryClient.Timeout != 5*time.Second {
 					t.Errorf("LoadConfig() InventoryClient.Timeout = %v, want 5s", cfg.InventoryClient.Timeout)
 				}
+				if cfg.PaymentServiceURL != tt.envVars["PAYMENT_SERVICE_URL"] {
+					t.Errorf("LoadConfig() PaymentServiceURL = %v, want %v", cfg.PaymentServiceURL, tt.envVars["PAYMENT_SERVICE_URL"])
+				}
+				if cfg.PaymentClient.Timeout != 5*time.Second {
+					t.Errorf("LoadConfig() PaymentClient.Timeout = %v, want 5s", cfg.PaymentClient.Timeout)
+				}
 			}
 
 			// Clean up
@@ -215,6 +237,7 @@ func TestValidate(t *testing.T) {
 					Endpoint: "http://localhost:14268/api/traces",
 				},
 				InventoryServiceURL: "http://inventory:8080",
+				PaymentServiceURL:   "http://payment:8080",
 			},
 			wantErr: false,
 		},
@@ -264,6 +287,7 @@ func clearEnvVars() {
 		"ORDER_KAFKA_GROUP_ID",
 		"JAEGER_ENDPOINT",
 		"INVENTORY_SERVICE_URL",
+		"PAYMENT_SERVICE_URL",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)

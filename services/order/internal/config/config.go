@@ -26,6 +26,11 @@ type InventoryClientConfig struct {
 	Timeout time.Duration `mapstructure:"timeout"`
 }
 
+// PaymentClientConfig controls the HTTP client used to refund a payment during compensation.
+type PaymentClientConfig struct {
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
 type Config struct {
 	Server       config.ServerConfig   `mapstructure:"server"`
 	Database     config.DatabaseConfig `mapstructure:"database"`
@@ -41,6 +46,8 @@ type Config struct {
 	Service             config.ServiceConfig  `mapstructure:"service"`
 	InventoryServiceURL string                `mapstructure:"inventory_service_url"`
 	InventoryClient     InventoryClientConfig `mapstructure:"inventory_client"`
+	PaymentServiceURL   string                `mapstructure:"payment_service_url"`
+	PaymentClient       PaymentClientConfig   `mapstructure:"payment_client"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -61,6 +68,7 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("outbox.relay_interval", "1s")
 	loader.SetDefault("outbox.relay_batch_size", 100)
 	loader.SetDefault("inventory_client.timeout", "5s")
+	loader.SetDefault("payment_client.timeout", "5s")
 
 	// Explicitly bind environment variables
 	if err := loader.BindEnv("server.port", "ORDER_SERVER_PORT", "ORDER_SERVICE_PORT"); err != nil {
@@ -83,6 +91,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if err := loader.BindEnv("inventory_service_url", "INVENTORY_SERVICE_URL"); err != nil {
 		return nil, fmt.Errorf("failed to bind inventory_service_url: %w", err)
+	}
+	if err := loader.BindEnv("payment_service_url", "PAYMENT_SERVICE_URL"); err != nil {
+		return nil, fmt.Errorf("failed to bind payment_service_url: %w", err)
 	}
 
 	err := loader.Load(&cfg)
@@ -142,6 +153,11 @@ func (c *Config) Validate() error {
 	// Validation for the inventory client
 	if c.InventoryServiceURL == "" {
 		return fmt.Errorf("INVENTORY_SERVICE_URL environment variable is not set")
+	}
+
+	// Validation for the payment client
+	if c.PaymentServiceURL == "" {
+		return fmt.Errorf("PAYMENT_SERVICE_URL environment variable is not set")
 	}
 
 	// Final validation of database fields after parsing (which happens in LoadConfig)

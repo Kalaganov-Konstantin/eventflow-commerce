@@ -92,6 +92,22 @@ func (f *fakeInventoryReleaser) Release(_ context.Context, orderID uuid.UUID) er
 	return f.releaseErr
 }
 
+type paymentRefundCall struct {
+	paymentID uuid.UUID
+	reason    string
+}
+
+// fakePaymentRefunder is an in-memory PaymentRefunder test double.
+type fakePaymentRefunder struct {
+	refundErr   error
+	refundCalls []paymentRefundCall
+}
+
+func (f *fakePaymentRefunder) Refund(_ context.Context, paymentID uuid.UUID, reason string) error {
+	f.refundCalls = append(f.refundCalls, paymentRefundCall{paymentID, reason})
+	return f.refundErr
+}
+
 func newTestOrder(status domain.Status) *domain.Order {
 	return &domain.Order{
 		ID:               uuid.New(),
@@ -114,7 +130,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 		order := newTestOrder(domain.StatusPending)
 		repo := &fakeRepository{order: order}
 		sagaRepo := &fakeSagaRepository{}
-		svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -164,7 +180,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusConfirmed)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -198,7 +214,7 @@ func TestOrderService_MarkPendingPayment(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		repo := &fakeRepository{getErr: errTestRepository}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -230,7 +246,7 @@ func TestOrderService_MarkPendingPaymentAfterCreate(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPending)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -257,7 +273,7 @@ func TestOrderService_MarkPendingPaymentAfterCreate(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		repo := &fakeRepository{order: newTestOrder(domain.StatusPending)}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin().WillReturnError(errTestRepository)
 
@@ -275,7 +291,7 @@ func TestOrderService_MarkPendingPaymentAfterCreate(t *testing.T) {
 
 		order := newTestOrder(domain.StatusConfirmed)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectRollback()
@@ -302,7 +318,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order}
 		sagaRepo := &fakeSagaRepository{}
-		svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
@@ -343,7 +359,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).WillReturnError(errTestRepository)
@@ -376,7 +392,7 @@ func TestOrderService_ConfirmPayment(t *testing.T) {
 
 				order := newTestOrder(status)
 				repo := &fakeRepository{order: order}
-				svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+				svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 				mock.ExpectBegin()
 				mock.ExpectCommit()
@@ -415,7 +431,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 		repo := &fakeRepository{order: order}
 		sagaRepo := &fakeSagaRepository{}
 		inventory := &fakeInventoryReleaser{}
-		svc := NewOrderService(repo, db, sagaRepo, inventory)
+		svc := NewOrderService(repo, db, sagaRepo, inventory, &fakePaymentRefunder{})
 
 		mock.ExpectBegin() // the caller's transaction, opened below
 		mock.ExpectBegin() // markCompensating's own transaction
@@ -467,7 +483,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 		sagaRepo := &fakeSagaRepository{}
 		releaseErr := errors.New("inventory service unavailable")
 		inventory := &fakeInventoryReleaser{releaseErr: releaseErr}
-		svc := NewOrderService(repo, db, sagaRepo, inventory)
+		svc := NewOrderService(repo, db, sagaRepo, inventory, &fakePaymentRefunder{})
 
 		mock.ExpectBegin() // the caller's transaction, opened below and never used
 		mock.ExpectBegin() // markCompensating's own transaction
@@ -511,7 +527,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 
 		order := newTestOrder(domain.StatusPendingPayment)
 		repo := &fakeRepository{order: order, updateErr: apperrors.NewConflict("stale version")}
-		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{})
+		svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 		mock.ExpectBegin() // the caller's transaction, opened below
 		mock.ExpectBegin() // markCompensating's own transaction
@@ -548,7 +564,7 @@ func TestOrderService_FailPayment(t *testing.T) {
 				order := newTestOrder(status)
 				repo := &fakeRepository{order: order}
 				sagaRepo := &fakeSagaRepository{}
-				svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{})
+				svc := NewOrderService(repo, db, sagaRepo, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
 
 				mock.ExpectBegin()
 				mock.ExpectCommit()
@@ -569,6 +585,198 @@ func TestOrderService_FailPayment(t *testing.T) {
 				}
 				if len(sagaRepo.transitionCalls) != 0 {
 					t.Errorf("saga transitions = %v, want none", sagaRepo.transitionCalls)
+				}
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Errorf("unmet expectations: %v", err)
+				}
+			})
+		}
+	})
+}
+
+func TestOrderService_FailAfterPayment(t *testing.T) {
+	reason := "downstream_failure"
+
+	t.Run("refunds, releases and cancels in the reverse order of the saga's steps", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder(domain.StatusPendingPayment)
+		paymentID := uuid.New()
+		repo := &fakeRepository{order: order}
+		sagaRepo := &fakeSagaRepository{}
+		inventory := &fakeInventoryReleaser{}
+		payments := &fakePaymentRefunder{}
+		svc := NewOrderService(repo, db, sagaRepo, inventory, payments)
+
+		mock.ExpectBegin() // the caller's transaction, opened below
+		mock.ExpectBegin() // markCompensating's own transaction
+		mock.ExpectCommit()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+			WithArgs(sqlmock.AnyArg(), "orders.events", "order.cancelled", order.ID.String(), sqlmock.AnyArg(), nil).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		if err := svc.FailAfterPayment(context.Background(), tx, order.ID, paymentID, reason); err != nil {
+			t.Fatalf("FailAfterPayment() error = %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("tx.Commit() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+
+		if len(repo.updateCalls) != 1 || repo.updateCalls[0].status != domain.StatusCancelled {
+			t.Errorf("UpdateStatus calls = %+v, want a single call to cancelled", repo.updateCalls)
+		}
+		if len(payments.refundCalls) != 1 || payments.refundCalls[0] != (paymentRefundCall{paymentID, reason}) {
+			t.Errorf("refund calls = %+v, want a single refund of %v", payments.refundCalls, paymentID)
+		}
+		if len(inventory.released) != 1 || inventory.released[0] != order.ID {
+			t.Errorf("released = %v, want a single release of %v", inventory.released, order.ID)
+		}
+		wantTransitions := []sagaTransitionCall{
+			{order.ID, saga.StateCompensating},
+			{order.ID, saga.StateCompensated},
+		}
+		if !reflect.DeepEqual(sagaRepo.transitionCalls, wantTransitions) {
+			t.Errorf("saga transitions = %+v, want %+v", sagaRepo.transitionCalls, wantTransitions)
+		}
+	})
+
+	t.Run("a refund failure leaves the saga compensating without releasing stock", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder(domain.StatusPendingPayment)
+		refundErr := errors.New("payment service unavailable")
+		repo := &fakeRepository{order: order}
+		sagaRepo := &fakeSagaRepository{}
+		inventory := &fakeInventoryReleaser{}
+		payments := &fakePaymentRefunder{refundErr: refundErr}
+		svc := NewOrderService(repo, db, sagaRepo, inventory, payments)
+
+		mock.ExpectBegin() // the caller's transaction, opened below and never used
+		mock.ExpectBegin() // markCompensating's own transaction
+		mock.ExpectCommit()
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		err = svc.FailAfterPayment(context.Background(), tx, order.ID, uuid.New(), reason)
+		if !errors.Is(err, refundErr) {
+			t.Errorf("error = %v, want to wrap %v", err, refundErr)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+
+		if len(inventory.released) != 0 {
+			t.Errorf("released = %v, want no release attempt before a successful refund", inventory.released)
+		}
+		wantTransitions := []sagaTransitionCall{{order.ID, saga.StateCompensating}}
+		if !reflect.DeepEqual(sagaRepo.transitionCalls, wantTransitions) {
+			t.Errorf("saga transitions = %+v, want the saga left compensating", sagaRepo.transitionCalls)
+		}
+		if len(sagaRepo.lastErrorCalls) != 1 {
+			t.Errorf("expected the failure to be recorded on the saga, lastErrorCalls = %v", sagaRepo.lastErrorCalls)
+		}
+	})
+
+	t.Run("a release failure after a successful refund leaves the saga compensating", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		order := newTestOrder(domain.StatusPendingPayment)
+		releaseErr := errors.New("inventory service unavailable")
+		repo := &fakeRepository{order: order}
+		sagaRepo := &fakeSagaRepository{}
+		inventory := &fakeInventoryReleaser{releaseErr: releaseErr}
+		payments := &fakePaymentRefunder{}
+		svc := NewOrderService(repo, db, sagaRepo, inventory, payments)
+
+		mock.ExpectBegin() // the caller's transaction, opened below and never used
+		mock.ExpectBegin() // markCompensating's own transaction
+		mock.ExpectCommit()
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		err = svc.FailAfterPayment(context.Background(), tx, order.ID, uuid.New(), reason)
+		if !errors.Is(err, releaseErr) {
+			t.Errorf("error = %v, want to wrap %v", err, releaseErr)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+
+		if len(payments.refundCalls) != 1 {
+			t.Errorf("refund calls = %v, want a single refund attempt", payments.refundCalls)
+		}
+		wantTransitions := []sagaTransitionCall{{order.ID, saga.StateCompensating}}
+		if !reflect.DeepEqual(sagaRepo.transitionCalls, wantTransitions) {
+			t.Errorf("saga transitions = %+v, want the saga left compensating", sagaRepo.transitionCalls)
+		}
+	})
+
+	t.Run("ignores an order that already reached a terminal status", func(t *testing.T) {
+		for _, status := range []domain.Status{domain.StatusConfirmed, domain.StatusPaymentFailed, domain.StatusCancelled} {
+			t.Run(string(status), func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				if err != nil {
+					t.Fatalf("sqlmock.New() error = %v", err)
+				}
+				defer func() { _ = db.Close() }()
+
+				order := newTestOrder(status)
+				repo := &fakeRepository{order: order}
+				payments := &fakePaymentRefunder{}
+				inventory := &fakeInventoryReleaser{}
+				svc := NewOrderService(repo, db, &fakeSagaRepository{}, inventory, payments)
+
+				mock.ExpectBegin()
+				mock.ExpectCommit()
+
+				tx, err := db.Begin()
+				if err != nil {
+					t.Fatalf("db.Begin() error = %v", err)
+				}
+
+				if err := svc.FailAfterPayment(context.Background(), tx, order.ID, uuid.New(), reason); err != nil {
+					t.Fatalf("FailAfterPayment() error = %v", err)
+				}
+				if err := tx.Commit(); err != nil {
+					t.Fatalf("tx.Commit() error = %v", err)
+				}
+				if len(payments.refundCalls) != 0 || len(inventory.released) != 0 {
+					t.Errorf("expected no compensation, refundCalls = %v released = %v", payments.refundCalls, inventory.released)
 				}
 				if err := mock.ExpectationsWereMet(); err != nil {
 					t.Errorf("unmet expectations: %v", err)

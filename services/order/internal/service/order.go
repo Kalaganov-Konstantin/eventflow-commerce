@@ -34,6 +34,12 @@ type InventoryReleaser interface {
 	Release(ctx context.Context, orderID uuid.UUID) error
 }
 
+// PaymentRefunder is the port the order service uses to refund a payment while compensating a
+// saga that fails after the payment already succeeded.
+type PaymentRefunder interface {
+	Refund(ctx context.Context, paymentID uuid.UUID, reason string) error
+}
+
 // OrderService applies order lifecycle transitions and records the resulting domain event in the
 // outbox, within a transaction supplied by the caller so it can be combined with other writes.
 type OrderService struct {
@@ -41,14 +47,15 @@ type OrderService struct {
 	db        *sql.DB
 	saga      SagaRepository
 	inventory InventoryReleaser
+	payments  PaymentRefunder
 	outbox    *outbox.Store
 }
 
-// NewOrderService builds an OrderService backed by repo, sagaRepo and inventory. db is used only
-// for transitions that have no caller-supplied transaction to join, such as
+// NewOrderService builds an OrderService backed by repo, sagaRepo, inventory and payments. db is
+// used only for transitions that have no caller-supplied transaction to join, such as
 // MarkPendingPaymentAfterCreate and the saga's durable compensating checkpoint.
-func NewOrderService(repo Repository, db *sql.DB, sagaRepo SagaRepository, inventory InventoryReleaser) *OrderService {
-	return &OrderService{repo: repo, db: db, saga: sagaRepo, inventory: inventory, outbox: outbox.NewStore()}
+func NewOrderService(repo Repository, db *sql.DB, sagaRepo SagaRepository, inventory InventoryReleaser, payments PaymentRefunder) *OrderService {
+	return &OrderService{repo: repo, db: db, saga: sagaRepo, inventory: inventory, payments: payments, outbox: outbox.NewStore()}
 }
 
 // MarkPendingPaymentAfterCreate transitions order to pending_payment and enqueues
@@ -139,6 +146,45 @@ func (s *OrderService) FailPayment(ctx context.Context, tx *sql.Tx, orderID uuid
 	}
 
 	if err := s.applyTransition(ctx, tx, order, (*domain.Order).Fail, events.EventTypeOrderCancelled); err != nil {
+		return err
+	}
+	return s.saga.Transition(ctx, tx, orderID, saga.StateCompensated)
+}
+
+// FailAfterPayment compensates an order whose payment already succeeded but the order cannot be
+// completed: it refunds the payment, releases the stock reservation, then cancels the order,
+// undoing the saga's steps in the reverse order they ran, as on the compensation diagram. paymentID
+// identifies the payment to refund; the caller is expected to know it, since the saga only reaches
+// awaiting_payment before a payment result exists to record. An order that already reached a
+// terminal status is left untouched.
+//
+// Like FailPayment, the compensating transition is committed in its own transaction before either
+// compensating call, so the saga durably records that compensation started even if a step fails and
+// this method returns an error for the caller to retry. tx is used only for the final, successful
+// transition, alongside order.cancelled, atomically.
+func (s *OrderService) FailAfterPayment(ctx context.Context, tx *sql.Tx, orderID, paymentID uuid.UUID, reason string) error {
+	order, err := s.repo.GetByID(ctx, orderID)
+	if err != nil {
+		return err
+	}
+	if isTerminal(order.Status) {
+		return nil
+	}
+
+	if err := s.markCompensating(ctx, orderID); err != nil {
+		return err
+	}
+
+	if err := s.payments.Refund(ctx, paymentID, reason); err != nil {
+		_ = s.saga.SetLastError(ctx, orderID, err.Error())
+		return fmt.Errorf("refund payment %s for order %s: %w", paymentID, orderID, err)
+	}
+	if err := s.inventory.Release(ctx, orderID); err != nil {
+		_ = s.saga.SetLastError(ctx, orderID, err.Error())
+		return fmt.Errorf("release reservation for order %s: %w", orderID, err)
+	}
+
+	if err := s.applyTransition(ctx, tx, order, (*domain.Order).Cancel, events.EventTypeOrderCancelled); err != nil {
 		return err
 	}
 	return s.saga.Transition(ctx, tx, orderID, saga.StateCompensated)

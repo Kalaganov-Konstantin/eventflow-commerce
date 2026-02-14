@@ -68,8 +68,9 @@ func main() {
 	relay.Start(context.Background())
 
 	inventoryClient := client.NewInventoryClient(cfg.InventoryServiceURL, cfg.InventoryClient.Timeout)
+	paymentClient := client.NewPaymentClient(cfg.PaymentServiceURL, cfg.PaymentClient.Timeout)
 	orderService := service.NewOrderService(
-		repository.NewOrderRepository(db.DB), db.DB, repository.NewSagaRepository(db.DB), inventoryClient)
+		repository.NewOrderRepository(db.DB), db.DB, repository.NewSagaRepository(db.DB), inventoryClient, paymentClient)
 	processedStore := events.NewProcessedStore(db.DB)
 	paymentsSubscriber := events.NewSubscriber(events.KafkaConfig{
 		Brokers:  cfg.Kafka.Brokers,
