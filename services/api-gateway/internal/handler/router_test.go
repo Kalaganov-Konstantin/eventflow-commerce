@@ -10,13 +10,14 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 )
 
 func newTestRouter(t *testing.T, cfg *config.Config, logger *zap.Logger, startTime time.Time) *Router {
 	t.Helper()
 
-	router, err := NewRouter(cfg, logger, startTime)
+	router, err := NewRouter(cfg, logger, nil, startTime)
 	if err != nil {
 		t.Fatalf("NewRouter returned unexpected error: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestNewRouter_InvalidServiceURL(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	_, err := NewRouter(cfg, logger, time.Now())
+	_, err := NewRouter(cfg, logger, nil, time.Now())
 	if err == nil {
 		t.Fatal("Expected NewRouter to return an error for an unparsable service URL")
 	}
@@ -361,7 +362,7 @@ func TestProxyErrorHandler_AllErrorTypes(t *testing.T) {
 			// Create an error with the test message
 			err := fmt.Errorf("%s", tc.errorMessage)
 
-			router.proxyErrorHandler(w, req, err)
+			router.proxyErrorHandler(w, req, err, backendOrder)
 
 			if w.Code != tc.expectedStatus {
 				t.Errorf("Expected status %d, got %d", tc.expectedStatus, w.Code)
@@ -523,5 +524,71 @@ func TestSetProxyHeaders_EdgeCases(t *testing.T) {
 
 	if req3.Header.Get("X-Forwarded-Proto") != "http" {
 		t.Errorf("Expected X-Forwarded-Proto to default to 'http', got '%s'", req3.Header.Get("X-Forwarded-Proto"))
+	}
+}
+
+func TestProxyToService_RecordsProxyMetrics(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	metrics := NewTestMetrics()
+
+	router, err := NewRouter(cfg, logger, metrics, time.Now())
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	router.SetupRoutes()
+
+	before := testutil.ToFloat64(metrics.ProxyRequestsTotal.WithLabelValues(backendOrder, "GET", "200"))
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	after := testutil.ToFloat64(metrics.ProxyRequestsTotal.WithLabelValues(backendOrder, "GET", "200"))
+	if after != before+1 {
+		t.Errorf("Expected proxy requests metric labelled by backend name to increase by 1, got %v -> %v", before, after)
+	}
+}
+
+func TestProxyToService_RecordsProxyErrorMetrics(t *testing.T) {
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	backendURL := backend.URL
+	backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backendURL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	metrics := NewTestMetrics()
+
+	router, err := NewRouter(cfg, logger, metrics, time.Now())
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	router.SetupRoutes()
+
+	before := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	after := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+	if after != before+1 {
+		t.Errorf("Expected proxy errors metric labelled by backend name to increase by 1, got %v -> %v", before, after)
 	}
 }

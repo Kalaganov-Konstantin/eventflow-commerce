@@ -44,7 +44,7 @@ func NewServer(opts Options) (*Server, error) {
 	}
 
 	// Create router
-	router, err := handler.NewRouter(opts.Config, opts.Logger, time.Now())
+	router, err := handler.NewRouter(opts.Config, opts.Logger, metrics, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create router: %w", err)
 	}
@@ -62,6 +62,7 @@ func NewServer(opts Options) (*Server, error) {
 	var finalHandler http.Handler = router
 	finalHandler = handler.JWTMiddleware(opts.Config.JWTSecret, opts.Logger, metrics)(finalHandler)
 	finalHandler = handler.RateLimitMiddleware(rateLimiter, metrics)(finalHandler)
+	finalHandler = recordRequestMetrics(metrics)(finalHandler)
 
 	// Mount the router with middleware chain
 	mux.Handle("/", finalHandler)
@@ -83,6 +84,33 @@ func NewServer(opts Options) (*Server, error) {
 		metrics:     metrics,
 		router:      router,
 	}, nil
+}
+
+// recordRequestMetrics wraps every request, recording it with Metrics.RecordRequest
+// regardless of which downstream layer (rate limiting, JWT, routing) produced the response.
+func recordRequestMetrics(metrics *handler.Metrics) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+
+			next.ServeHTTP(recorder, r)
+
+			metrics.RecordRequest(r.Method, r.URL.Path, recorder.statusCode, time.Since(start))
+		})
+	}
+}
+
+// statusRecorder captures the status code written to a ResponseWriter so it
+// can be reported in metrics after the handler returns.
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.statusCode = code
+	s.ResponseWriter.WriteHeader(code)
 }
 
 // Start starts the HTTP server

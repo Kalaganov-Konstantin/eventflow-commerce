@@ -27,9 +27,22 @@ const (
 type Router struct {
 	config    *config.Config
 	logger    *zap.Logger
+	metrics   *Metrics
 	mux       *http.ServeMux
 	startTime time.Time
 	proxies   map[string]*backendProxy
+}
+
+// statusRecorder captures the status code written to a ResponseWriter so it
+// can be reported in metrics after the handler returns.
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.statusCode = code
+	s.ResponseWriter.WriteHeader(code)
 }
 
 // backendProxy pairs a parsed backend target with its pre-built reverse proxy.
@@ -49,11 +62,12 @@ type ErrorResponse struct {
 
 // NewRouter creates a new router instance, building one reverse proxy per
 // backend service up front. It returns an error if a configured service URL
-// cannot be parsed.
-func NewRouter(cfg *config.Config, logger *zap.Logger, startTime time.Time) (*Router, error) {
+// cannot be parsed. metrics may be nil, in which case no metrics are recorded.
+func NewRouter(cfg *config.Config, logger *zap.Logger, metrics *Metrics, startTime time.Time) (*Router, error) {
 	r := &Router{
 		config:    cfg,
 		logger:    logger,
+		metrics:   metrics,
 		mux:       http.NewServeMux(),
 		startTime: startTime,
 		proxies:   make(map[string]*backendProxy, 4),
@@ -92,7 +106,9 @@ func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
 		baseDirector(req)
 		r.setProxyHeaders(req, originalPath, target.Host)
 	}
-	proxy.ErrorHandler = r.proxyErrorHandler
+	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
+		r.proxyErrorHandler(w, req, err, name)
+	}
 
 	return &backendProxy{name: name, target: target, proxy: proxy}, nil
 }
@@ -172,7 +188,14 @@ func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name s
 		req = req.WithContext(ctx)
 	}
 
-	bp.proxy.ServeHTTP(w, req)
+	start := time.Now()
+	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+
+	bp.proxy.ServeHTTP(recorder, req)
+
+	if r.metrics != nil {
+		r.metrics.RecordProxyRequest(name, req.Method, recorder.statusCode, time.Since(start))
+	}
 }
 
 // setProxyHeaders sets standard proxy headers
@@ -249,7 +272,7 @@ func (r *Router) isValidIP(ip string) bool {
 }
 
 // proxyErrorHandler handles proxy errors
-func (r *Router) proxyErrorHandler(w http.ResponseWriter, req *http.Request, err error) {
+func (r *Router) proxyErrorHandler(w http.ResponseWriter, req *http.Request, err error, targetService string) {
 	r.logger.Error("Proxy request failed",
 		zap.String("url", req.URL.String()),
 		zap.String("method", req.Method),
@@ -273,6 +296,10 @@ func (r *Router) proxyErrorHandler(w http.ResponseWriter, req *http.Request, err
 	default:
 		statusCode = http.StatusBadGateway
 		errorCode = "PROXY_ERROR"
+	}
+
+	if r.metrics != nil {
+		r.metrics.RecordProxyError(targetService, errorCode)
 	}
 
 	// Create error response
