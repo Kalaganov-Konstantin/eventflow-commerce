@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/handler"
+	sharedmw "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
@@ -58,11 +59,14 @@ func NewServer(opts Options) (*Server, error) {
 	// Setup routes
 	router.SetupRoutes()
 
-	// Apply middleware chain to router
+	// Apply middleware chain to router. Rate limiting runs before authentication;
+	// request ID and panic recovery wrap everything ahead of rate limiting.
 	var finalHandler http.Handler = router
 	finalHandler = handler.JWTMiddleware(opts.Config.JWTSecret, opts.Logger, metrics)(finalHandler)
 	finalHandler = handler.RateLimitMiddleware(rateLimiter, metrics)(finalHandler)
 	finalHandler = recordRequestMetrics(metrics)(finalHandler)
+	finalHandler = forwardRequestID(finalHandler)
+	finalHandler = sharedmw.Chain(sharedmw.Recovery(opts.Logger), sharedmw.RequestID)(finalHandler)
 
 	// Mount the router with middleware chain
 	mux.Handle("/", finalHandler)
@@ -84,6 +88,17 @@ func NewServer(opts Options) (*Server, error) {
 		metrics:     metrics,
 		router:      router,
 	}, nil
+}
+
+// forwardRequestID copies the request ID assigned by sharedmw.RequestID onto the
+// outgoing request headers, so it reaches the proxied backend, not just the response.
+func forwardRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := r.Context().Value(sharedmw.RequestIDKey).(string); ok && id != "" {
+			r.Header.Set("X-Request-ID", id)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // recordRequestMetrics wraps every request, recording it with Metrics.RecordRequest

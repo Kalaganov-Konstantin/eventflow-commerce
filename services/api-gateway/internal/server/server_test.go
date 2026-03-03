@@ -10,6 +10,8 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/handler"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
+	sharedmw "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
+	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -347,5 +349,149 @@ func TestServer_StartAndStop(t *testing.T) {
 		t.Errorf("Server startup failed: %v", err)
 	default:
 		// No startup error, which is good
+	}
+}
+
+func validJWT(t *testing.T, secret string) string {
+	t.Helper()
+
+	claims := &handler.Claims{
+		UserID: "test-user",
+		Email:  "test@example.com",
+		Role:   "user",
+	}
+	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("Failed to sign test token: %v", err)
+	}
+	return tokenString
+}
+
+func TestServer_RequestIDIsGeneratedAndForwarded(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend-Saw-Request-ID", r.Header.Get("X-Request-ID"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		Server: sharedConfig.ServerConfig{
+			Host: "localhost",
+			Port: "8080",
+		},
+		JWTSecret:              "test-secret-key-for-jwt-validation-testing",
+		OrderServiceURL:        backend.URL,
+		PaymentServiceURL:      backend.URL,
+		InventoryServiceURL:    backend.URL,
+		NotificationServiceURL: backend.URL,
+		RateLimit: config.RateLimitConfig{
+			RequestsPerMinute: 100,
+			WindowDuration:    60,
+		},
+		ProxyTimeout: 5,
+	}
+
+	logger := zaptest.NewLogger(t)
+	srv := newTestServer(t, Options{
+		Config:  cfg,
+		Logger:  logger,
+		Metrics: testMetrics,
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.Header.Set("Authorization", "Bearer "+validJWT(t, cfg.JWTSecret))
+	w := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	responseID := w.Header().Get("X-Request-ID")
+	if responseID == "" {
+		t.Error("Expected a generated X-Request-ID on the response")
+	}
+
+	backendSawID := w.Header().Get("X-Backend-Saw-Request-ID")
+	if backendSawID == "" {
+		t.Error("Expected the backend to receive an X-Request-ID header")
+	}
+
+	if backendSawID != responseID {
+		t.Errorf("Expected backend request ID %q to match response request ID %q", backendSawID, responseID)
+	}
+}
+
+func TestServer_RequestIDIsPreservedFromClient(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend-Saw-Request-ID", r.Header.Get("X-Request-ID"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		Server: sharedConfig.ServerConfig{
+			Host: "localhost",
+			Port: "8080",
+		},
+		JWTSecret:              "test-secret-key-for-jwt-validation-testing",
+		OrderServiceURL:        backend.URL,
+		PaymentServiceURL:      backend.URL,
+		InventoryServiceURL:    backend.URL,
+		NotificationServiceURL: backend.URL,
+		RateLimit: config.RateLimitConfig{
+			RequestsPerMinute: 100,
+			WindowDuration:    60,
+		},
+		ProxyTimeout: 5,
+	}
+
+	logger := zaptest.NewLogger(t)
+	srv := newTestServer(t, Options{
+		Config:  cfg,
+		Logger:  logger,
+		Metrics: testMetrics,
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.Header.Set("Authorization", "Bearer "+validJWT(t, cfg.JWTSecret))
+	req.Header.Set("X-Request-ID", "client-supplied-id")
+	w := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if got := w.Header().Get("X-Request-ID"); got != "client-supplied-id" {
+		t.Errorf("Expected client-supplied X-Request-ID to be preserved, got %q", got)
+	}
+
+	if got := w.Header().Get("X-Backend-Saw-Request-ID"); got != "client-supplied-id" {
+		t.Errorf("Expected backend to receive the client-supplied X-Request-ID, got %q", got)
+	}
+}
+
+func TestServer_RecoveryMiddlewareCatchesPanics(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	panicking := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		panic("boom")
+	})
+
+	wrapped := sharedmw.Chain(sharedmw.Recovery(logger), sharedmw.RequestID)(panicking)
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status %d after panic recovery, got %d", http.StatusInternalServerError, w.Code)
 	}
 }
