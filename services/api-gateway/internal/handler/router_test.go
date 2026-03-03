@@ -592,3 +592,77 @@ func TestProxyToService_RecordsProxyErrorMetrics(t *testing.T) {
 		t.Errorf("Expected proxy errors metric labelled by backend name to increase by 1, got %v -> %v", before, after)
 	}
 }
+
+func TestProxyToService_GeneratesCorrelationID(t *testing.T) {
+	var backendSawID string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendSawID = r.Header.Get("X-Correlation-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	responseID := w.Header().Get("X-Correlation-ID")
+	if responseID == "" {
+		t.Fatal("Expected a generated X-Correlation-ID on the response")
+	}
+
+	if backendSawID == "" {
+		t.Error("Expected the backend to receive an X-Correlation-ID header")
+	}
+
+	if backendSawID != responseID {
+		t.Errorf("Expected backend correlation id %q to match response correlation id %q", backendSawID, responseID)
+	}
+}
+
+func TestProxyToService_PreservesClientCorrelationID(t *testing.T) {
+	var backendSawID string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendSawID = r.Header.Get("X-Correlation-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.Header.Set("X-Correlation-ID", "client-supplied-correlation-id")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if got := w.Header().Get("X-Correlation-ID"); got != "client-supplied-correlation-id" {
+		t.Errorf("Expected client-supplied correlation id to be preserved, got %q", got)
+	}
+
+	if backendSawID != "client-supplied-correlation-id" {
+		t.Errorf("Expected backend to receive the client-supplied correlation id, got %q", backendSawID)
+	}
+}

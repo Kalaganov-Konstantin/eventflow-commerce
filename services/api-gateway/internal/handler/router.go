@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -22,6 +23,10 @@ const (
 	backendInventory    = "inventory"
 	backendNotification = "notification"
 )
+
+// correlationIDHeader carries the correlation ID that ties an HTTP request to
+// the chain of Kafka events it triggers downstream.
+const correlationIDHeader = "X-Correlation-ID"
 
 // Router handles HTTP routing and proxying
 type Router struct {
@@ -180,6 +185,8 @@ func (r *Router) createProxyHandler(name string) http.HandlerFunc {
 func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name string) {
 	bp := r.proxies[name]
 
+	ensureCorrelationID(w, req)
+
 	// Set timeout context
 	timeout := time.Duration(r.config.ProxyTimeout) * time.Second
 	if timeout > 0 {
@@ -196,6 +203,19 @@ func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name s
 	if r.metrics != nil {
 		r.metrics.RecordProxyRequest(name, req.Method, recorder.statusCode, time.Since(start))
 	}
+}
+
+// ensureCorrelationID returns the request's correlation ID, generating one if
+// the caller did not supply it, and mirrors it onto both the outgoing request
+// (so the backend receives it) and the response (so the caller can log it).
+func ensureCorrelationID(w http.ResponseWriter, req *http.Request) string {
+	correlationID := req.Header.Get(correlationIDHeader)
+	if correlationID == "" {
+		correlationID = uuid.New().String()
+		req.Header.Set(correlationIDHeader, correlationID)
+	}
+	w.Header().Set(correlationIDHeader, correlationID)
+	return correlationID
 }
 
 // setProxyHeaders sets standard proxy headers
