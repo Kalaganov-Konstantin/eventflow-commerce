@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -29,7 +30,7 @@ type Options struct {
 }
 
 // NewServer creates a new server instance
-func NewServer(opts Options) *Server {
+func NewServer(opts Options) (*Server, error) {
 	// Create rate limiter
 	rateLimiter := handler.NewRateLimiter(
 		opts.Config.RateLimit.RequestsPerMinute,
@@ -43,7 +44,10 @@ func NewServer(opts Options) *Server {
 	}
 
 	// Create router
-	router := handler.NewRouter(opts.Config, opts.Logger, time.Now())
+	router, err := handler.NewRouter(opts.Config, opts.Logger, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create router: %w", err)
+	}
 
 	// Setup main handler with middleware chain
 	mux := http.NewServeMux()
@@ -78,7 +82,7 @@ func NewServer(opts Options) *Server {
 		rateLimiter: rateLimiter,
 		metrics:     metrics,
 		router:      router,
-	}
+	}, nil
 }
 
 // Start starts the HTTP server

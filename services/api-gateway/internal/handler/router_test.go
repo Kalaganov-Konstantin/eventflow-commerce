@@ -13,6 +13,16 @@ import (
 	"go.uber.org/zap"
 )
 
+func newTestRouter(t *testing.T, cfg *config.Config, logger *zap.Logger, startTime time.Time) *Router {
+	t.Helper()
+
+	router, err := NewRouter(cfg, logger, startTime)
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	return router
+}
+
 func TestNewRouter(t *testing.T) {
 	cfg := &config.Config{
 		OrderServiceURL:        "http://order:8080",
@@ -22,10 +32,7 @@ func TestNewRouter(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
-	if router == nil {
-		t.Fatal("NewRouter returned nil")
-	}
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	if router.config != cfg {
 		t.Error("Router config not set correctly")
@@ -33,6 +40,38 @@ func TestNewRouter(t *testing.T) {
 
 	if router.mux == nil {
 		t.Error("Router mux not initialized")
+	}
+}
+
+func TestNewRouter_InvalidServiceURL(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL: "http://%zz",
+	}
+	logger, _ := zap.NewDevelopment()
+
+	_, err := NewRouter(cfg, logger, time.Now())
+	if err == nil {
+		t.Fatal("Expected NewRouter to return an error for an unparsable service URL")
+	}
+}
+
+func TestNewRouter_BuildsProxiesUpFront(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL:        "http://order:8080",
+		PaymentServiceURL:      "http://payment:8080",
+		InventoryServiceURL:    "http://inventory:8080",
+		NotificationServiceURL: "http://notification:8080",
+	}
+	logger, _ := zap.NewDevelopment()
+
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	// Proxies must exist right after construction, before any request is served.
+	for _, name := range []string{backendOrder, backendPayment, backendInventory, backendNotification} {
+		bp, ok := router.proxies[name]
+		if !ok || bp.proxy == nil {
+			t.Errorf("Expected a pre-built proxy for backend %q", name)
+		}
 	}
 }
 
@@ -44,7 +83,7 @@ func TestHealthCheck(t *testing.T) {
 		},
 	}
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +136,7 @@ func TestProxyToService(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	// Test proxying request to order service
@@ -128,7 +167,7 @@ func TestProxyToServiceInvalidURL(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -159,7 +198,7 @@ func TestRouteMapping(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	testCases := []struct {
@@ -235,7 +274,7 @@ func TestProxyHeaders(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -259,11 +298,7 @@ func TestNewRouterWithLogger(t *testing.T) {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	router := NewRouter(cfg, logger, time.Now())
-
-	if router == nil {
-		t.Fatal("NewRouterWithLogger returned nil")
-	}
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	if router.config != cfg {
 		t.Error("Router config not set correctly")
@@ -284,7 +319,7 @@ func TestProxyErrorHandler_AllErrorTypes(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	testCases := []struct {
 		name           string
@@ -350,7 +385,7 @@ func TestHealthCheck_ErrorHandling(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	// Test without logger (should not panic)
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -395,7 +430,7 @@ func TestProxyToService_ContextTimeout(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -432,7 +467,7 @@ func TestProxyToService_PrefixPathUnchanged(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/", nil)
@@ -455,7 +490,7 @@ func TestSetProxyHeaders_EdgeCases(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	// Test with existing X-Real-IP header
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)

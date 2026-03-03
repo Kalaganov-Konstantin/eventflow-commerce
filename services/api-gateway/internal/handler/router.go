@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -14,12 +15,28 @@ import (
 	"go.uber.org/zap"
 )
 
+// Backend names used both as proxy map keys and metric labels.
+const (
+	backendOrder        = "order"
+	backendPayment      = "payment"
+	backendInventory    = "inventory"
+	backendNotification = "notification"
+)
+
 // Router handles HTTP routing and proxying
 type Router struct {
 	config    *config.Config
 	logger    *zap.Logger
 	mux       *http.ServeMux
 	startTime time.Time
+	proxies   map[string]*backendProxy
+}
+
+// backendProxy pairs a parsed backend target with its pre-built reverse proxy.
+type backendProxy struct {
+	name   string
+	target *url.URL
+	proxy  *httputil.ReverseProxy
 }
 
 // ErrorResponse defines the structure for error responses
@@ -30,14 +47,54 @@ type ErrorResponse struct {
 	Details   map[string]string `json:"details,omitempty"`
 }
 
-// NewRouter creates a new router instance
-func NewRouter(cfg *config.Config, logger *zap.Logger, startTime time.Time) *Router {
-	return &Router{
+// NewRouter creates a new router instance, building one reverse proxy per
+// backend service up front. It returns an error if a configured service URL
+// cannot be parsed.
+func NewRouter(cfg *config.Config, logger *zap.Logger, startTime time.Time) (*Router, error) {
+	r := &Router{
 		config:    cfg,
 		logger:    logger,
 		mux:       http.NewServeMux(),
 		startTime: startTime,
+		proxies:   make(map[string]*backendProxy, 4),
 	}
+
+	backends := map[string]string{
+		backendOrder:        cfg.OrderServiceURL,
+		backendPayment:      cfg.PaymentServiceURL,
+		backendInventory:    cfg.InventoryServiceURL,
+		backendNotification: cfg.NotificationServiceURL,
+	}
+
+	for name, rawURL := range backends {
+		bp, err := r.newBackendProxy(name, rawURL)
+		if err != nil {
+			return nil, err
+		}
+		r.proxies[name] = bp
+	}
+
+	return r, nil
+}
+
+// newBackendProxy parses a backend service URL and builds its reverse proxy
+// once, wiring header propagation into the proxy's Director.
+func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s service url %q: %w", name, rawURL, err)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	baseDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalPath := req.URL.Path
+		baseDirector(req)
+		r.setProxyHeaders(req, originalPath, target.Host)
+	}
+	proxy.ErrorHandler = r.proxyErrorHandler
+
+	return &backendProxy{name: name, target: target, proxy: proxy}, nil
 }
 
 // SetupRoutes configures all routes
@@ -46,11 +103,11 @@ func (r *Router) SetupRoutes() {
 	r.mux.HandleFunc("/health", r.healthCheck)
 
 	// API routes with service-specific prefixes; the backend receives the full path
-	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(r.config.OrderServiceURL))
-	r.mux.HandleFunc("/api/v1/payments/", r.createProxyHandler(r.config.PaymentServiceURL))
-	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(r.config.InventoryServiceURL))
-	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(r.config.InventoryServiceURL))
-	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(r.config.NotificationServiceURL))
+	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(backendOrder))
+	r.mux.HandleFunc("/api/v1/payments/", r.createProxyHandler(backendPayment))
+	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(backendInventory))
+	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(backendInventory))
+	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(backendNotification))
 }
 
 // ServeHTTP implements http.Handler
@@ -95,35 +152,17 @@ func (r *Router) getServiceVersion() string {
 	return "unknown"
 }
 
-// createProxyHandler creates a reverse proxy handler for a service
-func (r *Router) createProxyHandler(targetURL string) http.HandlerFunc {
+// createProxyHandler creates a reverse proxy handler for a backend service
+func (r *Router) createProxyHandler(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		r.proxyToService(w, req, targetURL)
+		r.proxyToService(w, req, name)
 	}
 }
 
-// proxyToService handles proxying requests to backend services. The backend
-// receives the full request path; the service owns its own routes.
-func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, targetURL string) {
-	// Parse target URL
-	target, err := url.Parse(targetURL)
-	if err != nil {
-		r.logger.Error("Failed to parse target URL", zap.String("url", targetURL), zap.Error(err))
-		r.proxyErrorHandler(w, req, err)
-		return
-	}
-
-	// Create reverse proxy
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = r.proxyErrorHandler
-
-	// Modify request
-	originalPath := req.URL.Path
-	req.URL.Host = target.Host
-	req.URL.Scheme = target.Scheme
-
-	// Set proxy headers
-	r.setProxyHeaders(req, originalPath, target.Host)
+// proxyToService forwards the request through the pre-built reverse proxy for
+// the named backend. The backend receives the full request path.
+func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name string) {
+	bp := r.proxies[name]
 
 	// Set timeout context
 	timeout := time.Duration(r.config.ProxyTimeout) * time.Second
@@ -133,8 +172,7 @@ func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, target
 		req = req.WithContext(ctx)
 	}
 
-	// Serve the request
-	proxy.ServeHTTP(w, req)
+	bp.proxy.ServeHTTP(w, req)
 }
 
 // setProxyHeaders sets standard proxy headers
