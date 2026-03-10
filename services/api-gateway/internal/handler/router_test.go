@@ -666,3 +666,130 @@ func TestProxyToService_PreservesClientCorrelationID(t *testing.T) {
 		t.Errorf("Expected backend to receive the client-supplied correlation id, got %q", backendSawID)
 	}
 }
+
+func TestLivenessCheck_AlwaysOK(t *testing.T) {
+	cfg := &config.Config{}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/live", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestReadinessCheck_AllBackendsHealthy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        backend.URL,
+		PaymentServiceURL:      backend.URL,
+		InventoryServiceURL:    backend.URL,
+		NotificationServiceURL: backend.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestReadinessCheck_ReportsUnavailableBackends(t *testing.T) {
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer healthy.Close()
+
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	down := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	downURL := down.URL
+	down.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        downURL,
+		PaymentServiceURL:      healthy.URL,
+		InventoryServiceURL:    healthy.URL,
+		NotificationServiceURL: healthy.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	var response struct {
+		Status      string   `json:"status"`
+		Unavailable []string `json:"unavailable"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse readiness response: %v", err)
+	}
+
+	if len(response.Unavailable) != 1 || response.Unavailable[0] != backendOrder {
+		t.Errorf("Expected only %q to be reported unavailable, got %v", backendOrder, response.Unavailable)
+	}
+}
+
+func TestReadinessCheck_RespectsTimeout(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        slow.URL,
+		PaymentServiceURL:      slow.URL,
+		InventoryServiceURL:    slow.URL,
+		NotificationServiceURL: slow.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.readinessTimeout = 20 * time.Millisecond
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	router.ServeHTTP(w, req)
+	elapsed := time.Since(start)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Expected readiness check to respect the short timeout, took %v", elapsed)
+	}
+}

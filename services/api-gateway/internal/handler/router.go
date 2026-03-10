@@ -28,14 +28,20 @@ const (
 // the chain of Kafka events it triggers downstream.
 const correlationIDHeader = "X-Correlation-ID"
 
+// defaultReadinessTimeout bounds how long a single backend health check may
+// take while answering /health/ready.
+const defaultReadinessTimeout = 2 * time.Second
+
 // Router handles HTTP routing and proxying
 type Router struct {
-	config    *config.Config
-	logger    *zap.Logger
-	metrics   *Metrics
-	mux       *http.ServeMux
-	startTime time.Time
-	proxies   map[string]*backendProxy
+	config           *config.Config
+	logger           *zap.Logger
+	metrics          *Metrics
+	mux              *http.ServeMux
+	startTime        time.Time
+	proxies          map[string]*backendProxy
+	httpClient       *http.Client
+	readinessTimeout time.Duration
 }
 
 // statusRecorder captures the status code written to a ResponseWriter so it
@@ -70,12 +76,14 @@ type ErrorResponse struct {
 // cannot be parsed. metrics may be nil, in which case no metrics are recorded.
 func NewRouter(cfg *config.Config, logger *zap.Logger, metrics *Metrics, startTime time.Time) (*Router, error) {
 	r := &Router{
-		config:    cfg,
-		logger:    logger,
-		metrics:   metrics,
-		mux:       http.NewServeMux(),
-		startTime: startTime,
-		proxies:   make(map[string]*backendProxy, 4),
+		config:           cfg,
+		logger:           logger,
+		metrics:          metrics,
+		mux:              http.NewServeMux(),
+		startTime:        startTime,
+		proxies:          make(map[string]*backendProxy, 4),
+		httpClient:       &http.Client{},
+		readinessTimeout: defaultReadinessTimeout,
 	}
 
 	backends := map[string]string{
@@ -120,8 +128,10 @@ func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
 
 // SetupRoutes configures all routes
 func (r *Router) SetupRoutes() {
-	// Health check endpoint
+	// Health check endpoints
 	r.mux.HandleFunc("/health", r.healthCheck)
+	r.mux.HandleFunc("/health/live", r.livenessCheck)
+	r.mux.HandleFunc("/health/ready", r.readinessCheck)
 
 	// API routes with service-specific prefixes; the backend receives the full path
 	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(backendOrder))
@@ -157,6 +167,70 @@ func (r *Router) healthCheck(w http.ResponseWriter, _ *http.Request) {
 		r.logger.Error("Failed to encode health check response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// livenessCheck answers whether the process is up. It never checks backends.
+func (r *Router) livenessCheck(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "alive"}); err != nil {
+		r.logger.Error("Failed to encode liveness response", zap.Error(err))
+	}
+}
+
+// readinessCheck answers whether every backend service is reachable, polling
+// each one's /health endpoint with a short timeout.
+func (r *Router) readinessCheck(w http.ResponseWriter, req *http.Request) {
+	names := []string{backendOrder, backendPayment, backendInventory, backendNotification}
+	unavailable := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if !r.backendHealthy(req.Context(), name) {
+			unavailable = append(unavailable, name)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if len(unavailable) > 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status":      "not_ready",
+			"unavailable": unavailable,
+		}); err != nil {
+			r.logger.Error("Failed to encode readiness response", zap.Error(err))
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ready"}); err != nil {
+		r.logger.Error("Failed to encode readiness response", zap.Error(err))
+	}
+}
+
+// backendHealthy calls the named backend's /health endpoint with a bounded timeout.
+func (r *Router) backendHealthy(ctx context.Context, name string) bool {
+	bp, ok := r.proxies[name]
+	if !ok {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, r.readinessTimeout)
+	defer cancel()
+
+	healthReq, err := http.NewRequestWithContext(ctx, http.MethodGet, bp.target.String()+"/health", nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := r.httpClient.Do(healthReq)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK
 }
 
 func (r *Router) getServiceName() string {
