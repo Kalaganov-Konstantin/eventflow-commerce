@@ -1,6 +1,6 @@
+import uvicorn
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
-import uvicorn
 
 from .config.config import load_config
 

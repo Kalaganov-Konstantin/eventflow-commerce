@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from notification.main import app
 
 client = TestClient(app)
