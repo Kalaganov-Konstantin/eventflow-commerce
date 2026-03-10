@@ -139,6 +139,9 @@ func (r *Router) SetupRoutes() {
 	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(backendInventory))
 	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(backendInventory))
 	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(backendNotification))
+
+	// Catch-all for unmapped API routes; more specific patterns above win.
+	r.mux.HandleFunc("/api/v1/", r.notFoundHandler)
 }
 
 // ServeHTTP implements http.Handler
@@ -363,6 +366,27 @@ func (r *Router) getClientIP(req *http.Request) string {
 // isValidIP validates if the string is a valid IP address
 func (r *Router) isValidIP(ip string) bool {
 	return net.ParseIP(ip) != nil
+}
+
+// notFoundHandler answers requests under /api/v1/ that do not match a known
+// backend route with a JSON error instead of the mux's empty 404 body.
+func (r *Router) notFoundHandler(w http.ResponseWriter, req *http.Request) {
+	response := ErrorResponse{
+		Error: "Route not found",
+		Code:  "NOT_FOUND",
+		Details: map[string]string{
+			"path":   req.URL.Path,
+			"method": req.Method,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		r.logger.Error("Failed to encode not found response", zap.Error(err))
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 // proxyErrorHandler handles proxy errors

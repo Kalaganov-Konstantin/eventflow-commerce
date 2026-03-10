@@ -793,3 +793,56 @@ func TestReadinessCheck_RespectsTimeout(t *testing.T) {
 		t.Errorf("Expected readiness check to respect the short timeout, took %v", elapsed)
 	}
 }
+
+func TestNotFoundHandler_UnknownAPIRoute(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL: "http://order:8080",
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/unknown-service/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("Expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+
+	var response ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse not found response: %v", err)
+	}
+
+	if response.Code != "NOT_FOUND" {
+		t.Errorf("Expected code 'NOT_FOUND', got %q", response.Code)
+	}
+}
+
+func TestNotFoundHandler_KnownRoutesStillProxy(t *testing.T) {
+	// Regression: registering the /api/v1/ catch-all must not shadow the
+	// more specific per-service routes.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected known route to still proxy successfully, got status %d", w.Code)
+	}
+}
