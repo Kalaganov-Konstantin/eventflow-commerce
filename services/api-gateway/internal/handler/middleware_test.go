@@ -395,6 +395,27 @@ func TestJWTMiddleware_HealthCheckBypass(t *testing.T) {
 	}
 }
 
+func TestJWTMiddleware_ReadinessAndLivenessBypass(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	middleware := JWTMiddleware("secret", logger, nil)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrappedHandler := middleware(handler)
+
+	for _, path := range []string{"/health/live", "/health/ready"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+
+		wrappedHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected %s to bypass auth, got status %d", path, w.Code)
+		}
+	}
+}
+
 func TestRateLimiter_Close(_ *testing.T) {
 	rl := NewRateLimiter(10, time.Minute)
 

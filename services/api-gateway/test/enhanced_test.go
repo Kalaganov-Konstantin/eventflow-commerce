@@ -18,7 +18,10 @@ func TestEnhancedHealthCheck(t *testing.T) {
 	cfg := &config.Config{}
 
 	zapLogger := zaptest.NewLogger(t)
-	router := handler.NewRouter(cfg, zapLogger, time.Now())
+	router, err := handler.NewRouter(cfg, zapLogger, nil, time.Now())
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -64,7 +67,10 @@ func TestEnhancedErrorHandling(t *testing.T) {
 	}
 
 	zapLogger := zaptest.NewLogger(t)
-	router := handler.NewRouter(cfg, zapLogger, time.Now())
+	router, err := handler.NewRouter(cfg, zapLogger, nil, time.Now())
+	if err != nil {
+		t.Fatalf("Failed to create router: %v", err)
+	}
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)

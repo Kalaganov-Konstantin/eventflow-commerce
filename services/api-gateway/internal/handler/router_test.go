@@ -10,8 +10,19 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 )
+
+func newTestRouter(t *testing.T, cfg *config.Config, logger *zap.Logger, startTime time.Time) *Router {
+	t.Helper()
+
+	router, err := NewRouter(cfg, logger, nil, startTime)
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	return router
+}
 
 func TestNewRouter(t *testing.T) {
 	cfg := &config.Config{
@@ -22,10 +33,7 @@ func TestNewRouter(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
-	if router == nil {
-		t.Fatal("NewRouter returned nil")
-	}
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	if router.config != cfg {
 		t.Error("Router config not set correctly")
@@ -33,6 +41,38 @@ func TestNewRouter(t *testing.T) {
 
 	if router.mux == nil {
 		t.Error("Router mux not initialized")
+	}
+}
+
+func TestNewRouter_InvalidServiceURL(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL: "http://%zz",
+	}
+	logger, _ := zap.NewDevelopment()
+
+	_, err := NewRouter(cfg, logger, nil, time.Now())
+	if err == nil {
+		t.Fatal("Expected NewRouter to return an error for an unparsable service URL")
+	}
+}
+
+func TestNewRouter_BuildsProxiesUpFront(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL:        "http://order:8080",
+		PaymentServiceURL:      "http://payment:8080",
+		InventoryServiceURL:    "http://inventory:8080",
+		NotificationServiceURL: "http://notification:8080",
+	}
+	logger, _ := zap.NewDevelopment()
+
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	// Proxies must exist right after construction, before any request is served.
+	for _, name := range []string{backendOrder, backendPayment, backendInventory, backendNotification} {
+		bp, ok := router.proxies[name]
+		if !ok || bp.proxy == nil {
+			t.Errorf("Expected a pre-built proxy for backend %q", name)
+		}
 	}
 }
 
@@ -44,7 +84,7 @@ func TestHealthCheck(t *testing.T) {
 		},
 	}
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -97,7 +137,7 @@ func TestProxyToService(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	// Test proxying request to order service
@@ -128,7 +168,7 @@ func TestProxyToServiceInvalidURL(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -159,7 +199,7 @@ func TestRouteMapping(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	testCases := []struct {
@@ -235,7 +275,7 @@ func TestProxyHeaders(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -259,11 +299,7 @@ func TestNewRouterWithLogger(t *testing.T) {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
-	router := NewRouter(cfg, logger, time.Now())
-
-	if router == nil {
-		t.Fatal("NewRouterWithLogger returned nil")
-	}
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	if router.config != cfg {
 		t.Error("Router config not set correctly")
@@ -284,7 +320,7 @@ func TestProxyErrorHandler_AllErrorTypes(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	testCases := []struct {
 		name           string
@@ -326,7 +362,7 @@ func TestProxyErrorHandler_AllErrorTypes(t *testing.T) {
 			// Create an error with the test message
 			err := fmt.Errorf("%s", tc.errorMessage)
 
-			router.proxyErrorHandler(w, req, err)
+			router.proxyErrorHandler(w, req, err, backendOrder)
 
 			if w.Code != tc.expectedStatus {
 				t.Errorf("Expected status %d, got %d", tc.expectedStatus, w.Code)
@@ -350,7 +386,7 @@ func TestHealthCheck_ErrorHandling(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	// Test without logger (should not panic)
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -395,7 +431,7 @@ func TestProxyToService_ContextTimeout(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -432,7 +468,7 @@ func TestProxyToService_PrefixPathUnchanged(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 	router.SetupRoutes()
 
 	req := httptest.NewRequest("GET", "/api/v1/orders/", nil)
@@ -455,7 +491,7 @@ func TestSetProxyHeaders_EdgeCases(t *testing.T) {
 	}
 	logger, _ := zap.NewDevelopment()
 
-	router := NewRouter(cfg, logger, time.Now())
+	router := newTestRouter(t, cfg, logger, time.Now())
 
 	// Test with existing X-Real-IP header
 	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
@@ -488,5 +524,325 @@ func TestSetProxyHeaders_EdgeCases(t *testing.T) {
 
 	if req3.Header.Get("X-Forwarded-Proto") != "http" {
 		t.Errorf("Expected X-Forwarded-Proto to default to 'http', got '%s'", req3.Header.Get("X-Forwarded-Proto"))
+	}
+}
+
+func TestProxyToService_RecordsProxyMetrics(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	metrics := NewTestMetrics()
+
+	router, err := NewRouter(cfg, logger, metrics, time.Now())
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	router.SetupRoutes()
+
+	before := testutil.ToFloat64(metrics.ProxyRequestsTotal.WithLabelValues(backendOrder, "GET", "200"))
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	after := testutil.ToFloat64(metrics.ProxyRequestsTotal.WithLabelValues(backendOrder, "GET", "200"))
+	if after != before+1 {
+		t.Errorf("Expected proxy requests metric labelled by backend name to increase by 1, got %v -> %v", before, after)
+	}
+}
+
+func TestProxyToService_RecordsProxyErrorMetrics(t *testing.T) {
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	backendURL := backend.URL
+	backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backendURL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	metrics := NewTestMetrics()
+
+	router, err := NewRouter(cfg, logger, metrics, time.Now())
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+	router.SetupRoutes()
+
+	before := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	after := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+	if after != before+1 {
+		t.Errorf("Expected proxy errors metric labelled by backend name to increase by 1, got %v -> %v", before, after)
+	}
+}
+
+func TestProxyToService_GeneratesCorrelationID(t *testing.T) {
+	var backendSawID string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendSawID = r.Header.Get("X-Correlation-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	responseID := w.Header().Get("X-Correlation-ID")
+	if responseID == "" {
+		t.Fatal("Expected a generated X-Correlation-ID on the response")
+	}
+
+	if backendSawID == "" {
+		t.Error("Expected the backend to receive an X-Correlation-ID header")
+	}
+
+	if backendSawID != responseID {
+		t.Errorf("Expected backend correlation id %q to match response correlation id %q", backendSawID, responseID)
+	}
+}
+
+func TestProxyToService_PreservesClientCorrelationID(t *testing.T) {
+	var backendSawID string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendSawID = r.Header.Get("X-Correlation-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.Header.Set("X-Correlation-ID", "client-supplied-correlation-id")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	if got := w.Header().Get("X-Correlation-ID"); got != "client-supplied-correlation-id" {
+		t.Errorf("Expected client-supplied correlation id to be preserved, got %q", got)
+	}
+
+	if backendSawID != "client-supplied-correlation-id" {
+		t.Errorf("Expected backend to receive the client-supplied correlation id, got %q", backendSawID)
+	}
+}
+
+func TestLivenessCheck_AlwaysOK(t *testing.T) {
+	cfg := &config.Config{}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/live", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestReadinessCheck_AllBackendsHealthy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        backend.URL,
+		PaymentServiceURL:      backend.URL,
+		InventoryServiceURL:    backend.URL,
+		NotificationServiceURL: backend.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestReadinessCheck_ReportsUnavailableBackends(t *testing.T) {
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer healthy.Close()
+
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	down := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	downURL := down.URL
+	down.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        downURL,
+		PaymentServiceURL:      healthy.URL,
+		InventoryServiceURL:    healthy.URL,
+		NotificationServiceURL: healthy.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	var response struct {
+		Status      string   `json:"status"`
+		Unavailable []string `json:"unavailable"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse readiness response: %v", err)
+	}
+
+	if len(response.Unavailable) != 1 || response.Unavailable[0] != backendOrder {
+		t.Errorf("Expected only %q to be reported unavailable, got %v", backendOrder, response.Unavailable)
+	}
+}
+
+func TestReadinessCheck_RespectsTimeout(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL:        slow.URL,
+		PaymentServiceURL:      slow.URL,
+		InventoryServiceURL:    slow.URL,
+		NotificationServiceURL: slow.URL,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.readinessTimeout = 20 * time.Millisecond
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	router.ServeHTTP(w, req)
+	elapsed := time.Since(start)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Expected readiness check to respect the short timeout, took %v", elapsed)
+	}
+}
+
+func TestNotFoundHandler_UnknownAPIRoute(t *testing.T) {
+	cfg := &config.Config{
+		OrderServiceURL: "http://order:8080",
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/unknown-service/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("Expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+
+	var response ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse not found response: %v", err)
+	}
+
+	if response.Code != "NOT_FOUND" {
+		t.Errorf("Expected code 'NOT_FOUND', got %q", response.Code)
+	}
+}
+
+func TestNotFoundHandler_KnownRoutesStillProxy(t *testing.T) {
+	// Regression: registering the /api/v1/ catch-all must not shadow the
+	// more specific per-service routes.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected known route to still proxy successfully, got status %d", w.Code)
 	}
 }

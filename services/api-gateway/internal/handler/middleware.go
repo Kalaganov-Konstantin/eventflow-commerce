@@ -20,7 +20,7 @@ type contextKey string
 const UserContextKey = contextKey("user")
 
 // Public paths that don't require authentication
-var publicPaths = []string{"/health", "/metrics"}
+var publicPaths = []string{"/health", "/metrics", "/health/live", "/health/ready"}
 
 // isPublicPath checks if the given path is a public endpoint that doesn't require authentication
 // Uses proper path normalization to prevent bypass attacks

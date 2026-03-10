@@ -61,11 +61,14 @@ func TestAPIGateway_Integration(t *testing.T) {
 	testMetrics := handler.NewTestMetrics()
 
 	// Create server
-	srv := server.NewServer(server.Options{
+	srv, err := server.NewServer(server.Options{
 		Config:  cfg,
 		Logger:  logger,
 		Metrics: testMetrics,
 	})
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
 
 	// Test health check
 	t.Run("HealthCheck", func(t *testing.T) {
@@ -126,11 +129,14 @@ func TestAPIGateway_Integration(t *testing.T) {
 		testCfg := *cfg
 		testCfg.RateLimit.RequestsPerMinute = 2
 
-		testSrv := server.NewServer(server.Options{
+		testSrv, err := server.NewServer(server.Options{
 			Config:  &testCfg,
 			Logger:  logger,
 			Metrics: handler.NewTestMetrics(),
 		})
+		if err != nil {
+			t.Fatalf("Failed to create server: %v", err)
+		}
 
 		// Make requests up to the limit
 		for i := 0; i < 2; i++ {

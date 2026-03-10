@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/handler"
+	sharedmw "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
@@ -29,7 +31,7 @@ type Options struct {
 }
 
 // NewServer creates a new server instance
-func NewServer(opts Options) *Server {
+func NewServer(opts Options) (*Server, error) {
 	// Create rate limiter
 	rateLimiter := handler.NewRateLimiter(
 		opts.Config.RateLimit.RequestsPerMinute,
@@ -43,7 +45,10 @@ func NewServer(opts Options) *Server {
 	}
 
 	// Create router
-	router := handler.NewRouter(opts.Config, opts.Logger, time.Now())
+	router, err := handler.NewRouter(opts.Config, opts.Logger, metrics, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create router: %w", err)
+	}
 
 	// Setup main handler with middleware chain
 	mux := http.NewServeMux()
@@ -54,10 +59,14 @@ func NewServer(opts Options) *Server {
 	// Setup routes
 	router.SetupRoutes()
 
-	// Apply middleware chain to router
+	// Apply middleware chain to router. Rate limiting runs before authentication;
+	// request ID and panic recovery wrap everything ahead of rate limiting.
 	var finalHandler http.Handler = router
 	finalHandler = handler.JWTMiddleware(opts.Config.JWTSecret, opts.Logger, metrics)(finalHandler)
 	finalHandler = handler.RateLimitMiddleware(rateLimiter, metrics)(finalHandler)
+	finalHandler = recordRequestMetrics(metrics)(finalHandler)
+	finalHandler = forwardRequestID(finalHandler)
+	finalHandler = sharedmw.Chain(sharedmw.Recovery(opts.Logger), sharedmw.RequestID)(finalHandler)
 
 	// Mount the router with middleware chain
 	mux.Handle("/", finalHandler)
@@ -78,7 +87,45 @@ func NewServer(opts Options) *Server {
 		rateLimiter: rateLimiter,
 		metrics:     metrics,
 		router:      router,
+	}, nil
+}
+
+// forwardRequestID copies the request ID assigned by sharedmw.RequestID onto the
+// outgoing request headers, so it reaches the proxied backend, not just the response.
+func forwardRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := r.Context().Value(sharedmw.RequestIDKey).(string); ok && id != "" {
+			r.Header.Set("X-Request-ID", id)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// recordRequestMetrics wraps every request, recording it with Metrics.RecordRequest
+// regardless of which downstream layer (rate limiting, JWT, routing) produced the response.
+func recordRequestMetrics(metrics *handler.Metrics) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+
+			next.ServeHTTP(recorder, r)
+
+			metrics.RecordRequest(r.Method, r.URL.Path, recorder.statusCode, time.Since(start))
+		})
 	}
+}
+
+// statusRecorder captures the status code written to a ResponseWriter so it
+// can be reported in metrics after the handler returns.
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.statusCode = code
+	s.ResponseWriter.WriteHeader(code)
 }
 
 // Start starts the HTTP server

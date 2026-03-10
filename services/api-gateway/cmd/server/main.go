@@ -44,10 +44,13 @@ func main() {
 		zap.String("version", cfg.Service.Version))
 
 	// Create and start server
-	srv := server.NewServer(server.Options{
+	srv, err := server.NewServer(server.Options{
 		Config: cfg,
 		Logger: logger,
 	})
+	if err != nil {
+		logger.Fatal("Failed to create server", zap.Error(err))
+	}
 
 	// Setup graceful shutdown
 	done := make(chan os.Signal, 1)
