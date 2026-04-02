@@ -56,10 +56,22 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
+	redisClient, err := database.NewRedisConnection(database.RedisConfig{
+		URL:      cfg.Redis.URL,
+		PoolSize: cfg.RedisPoolSize,
+	})
+	if err != nil {
+		appLogger.Warn("Failed to connect to Redis, starting without a cache", zap.Error(err))
+		redisClient = nil
+	} else {
+		defer func() { _ = redisClient.Close() }()
+	}
+
 	srv := server.New(server.Options{
 		Config: cfg,
 		Logger: appLogger.Logger,
 		DB:     db,
+		Redis:  redisClient,
 	})
 
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})

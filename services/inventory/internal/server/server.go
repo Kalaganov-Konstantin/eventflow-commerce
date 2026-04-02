@@ -28,6 +28,8 @@ type Options struct {
 	Logger  *zap.Logger
 	Metrics prometheus.Registerer
 	DB      *database.DB
+	// Redis is optional: a nil client means the service runs without a product cache.
+	Redis *database.RedisClient
 }
 
 // New builds the inventory HTTP server: health checks, metrics and the shared middleware chain.
@@ -37,11 +39,12 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
-	var checks map[string]httpserver.Check
+	checks := make(map[string]httpserver.Check)
 	if opts.DB != nil {
-		checks = map[string]httpserver.Check{
-			"database": opts.DB.PingContext,
-		}
+		checks["database"] = opts.DB.PingContext
+	}
+	if opts.Redis != nil {
+		checks["redis"] = func(ctx context.Context) error { return opts.Redis.Ping(ctx).Err() }
 	}
 
 	mux := http.NewServeMux()

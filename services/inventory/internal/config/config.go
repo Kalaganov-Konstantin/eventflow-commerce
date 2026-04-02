@@ -27,13 +27,14 @@ type Config struct {
 	DatabasePool DatabasePoolConfig    `mapstructure:"database_pool"`
 	// DatabaseURL is the raw connection string used to open the pool; Database
 	// above holds the same information split into fields for validation.
-	DatabaseURL string               `mapstructure:"-"`
-	Redis       config.RedisConfig   `mapstructure:"redis"`
-	Kafka       config.KafkaConfig   `mapstructure:"kafka"`
-	Outbox      OutboxConfig         `mapstructure:"outbox"`
-	Jaeger      config.JaegerConfig  `mapstructure:"jaeger"`
-	Logger      config.LoggerConfig  `mapstructure:"logger"`
-	Service     config.ServiceConfig `mapstructure:"service"`
+	DatabaseURL   string               `mapstructure:"-"`
+	Redis         config.RedisConfig   `mapstructure:"redis"`
+	RedisPoolSize int                  `mapstructure:"redis_pool_size"`
+	Kafka         config.KafkaConfig   `mapstructure:"kafka"`
+	Outbox        OutboxConfig         `mapstructure:"outbox"`
+	Jaeger        config.JaegerConfig  `mapstructure:"jaeger"`
+	Logger        config.LoggerConfig  `mapstructure:"logger"`
+	Service       config.ServiceConfig `mapstructure:"service"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -51,6 +52,7 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("database_pool.max_open_conns", 25)
 	loader.SetDefault("database_pool.max_idle_conns", 5)
 	loader.SetDefault("database_pool.max_lifetime", "5m")
+	loader.SetDefault("redis_pool_size", 10)
 	loader.SetDefault("outbox.relay_interval", "1s")
 	loader.SetDefault("outbox.relay_batch_size", 100)
 
@@ -63,6 +65,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if err := loader.BindEnv("redis.url", "REDIS_URL"); err != nil {
 		return nil, fmt.Errorf("failed to bind redis.url: %w", err)
+	}
+	if err := loader.BindEnv("redis_pool_size", "REDIS_POOL_SIZE"); err != nil {
+		return nil, fmt.Errorf("failed to bind redis_pool_size: %w", err)
 	}
 	if err := loader.BindEnv("kafka.brokers", "KAFKA_BROKERS"); err != nil {
 		return nil, fmt.Errorf("failed to bind kafka.brokers: %w", err)
