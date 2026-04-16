@@ -15,12 +15,18 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/server"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/service"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"go.uber.org/zap"
 )
+
+// cacheConsumerGroupID is the Kafka consumer group for the product cache invalidation
+// consumer, kept separate from the orders consumer's group so the two subscriptions do not
+// interfere with each other's offsets.
+const cacheConsumerGroupID = "inventory-cache"
 
 func main() {
 	cfg, err := config.LoadConfig()
@@ -94,6 +100,25 @@ func main() {
 		}
 	}()
 
+	var cacheSubscriber *events.Subscriber
+	if redisClient != nil {
+		productCache := cache.New(redisClient, 0)
+		cacheSubscriber = events.NewSubscriber(events.KafkaConfig{
+			Brokers:  cfg.Kafka.Brokers,
+			GroupID:  cacheConsumerGroupID,
+			DLQTopic: events.DLQTopic(events.InventoryTopic),
+		}, events.InventoryTopic, appLogger.Logger)
+		cacheConsumer := consumer.NewCacheConsumer(cacheSubscriber, productCache, appLogger.Logger)
+
+		go func() {
+			if err := cacheConsumer.Start(consumerCtx); err != nil && !stderrors.Is(err, context.Canceled) {
+				appLogger.Error("cache consumer stopped", zap.Error(err))
+			}
+		}()
+	} else {
+		appLogger.Warn("Redis unavailable, skipping the product cache invalidation consumer")
+	}
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -118,6 +143,11 @@ func main() {
 	stopConsumer()
 	if err := ordersSubscriber.Close(); err != nil {
 		appLogger.Error("Failed to close orders subscriber", zap.Error(err))
+	}
+	if cacheSubscriber != nil {
+		if err := cacheSubscriber.Close(); err != nil {
+			appLogger.Error("Failed to close cache subscriber", zap.Error(err))
+		}
 	}
 
 	relay.Stop()
