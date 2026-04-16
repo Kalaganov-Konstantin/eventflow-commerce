@@ -16,12 +16,22 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/server"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/service"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	"go.uber.org/zap"
 )
+
+// cacheConsumerGroupID is the Kafka consumer group for the order cache invalidation consumer,
+// kept separate from the payments consumer's group so the two subscriptions do not interfere
+// with each other's offsets.
+const cacheConsumerGroupID = "order-cache"
+
+// defaultRedisPoolSize is used for the order service's Redis connection pool; unlike inventory,
+// the order service has no dedicated config field for it yet.
+const defaultRedisPoolSize = 10
 
 func main() {
 	cfg, err := config.LoadConfig()
@@ -57,10 +67,22 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
+	redisClient, err := database.NewRedisConnection(database.RedisConfig{
+		URL:      cfg.Redis.URL,
+		PoolSize: defaultRedisPoolSize,
+	})
+	if err != nil {
+		appLogger.Warn("Failed to connect to Redis, starting without a cache", zap.Error(err))
+		redisClient = nil
+	} else {
+		defer func() { _ = redisClient.Close() }()
+	}
+
 	srv := server.New(server.Options{
 		Config: cfg,
 		Logger: appLogger.Logger,
 		DB:     db,
+		Redis:  redisClient,
 	})
 
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
@@ -86,6 +108,25 @@ func main() {
 		}
 	}()
 
+	var cacheSubscriber *events.Subscriber
+	if redisClient != nil {
+		orderCache := cache.New(redisClient, 0)
+		cacheSubscriber = events.NewSubscriber(events.KafkaConfig{
+			Brokers:  cfg.Kafka.Brokers,
+			GroupID:  cacheConsumerGroupID,
+			DLQTopic: events.DLQTopic(events.OrdersTopic),
+		}, events.OrdersTopic, appLogger.Logger)
+		cacheConsumer := consumer.NewCacheConsumer(cacheSubscriber, orderCache, appLogger.Logger)
+
+		go func() {
+			if err := cacheConsumer.Start(consumerCtx); err != nil && !stderrors.Is(err, context.Canceled) {
+				appLogger.Error("cache consumer stopped", zap.Error(err))
+			}
+		}()
+	} else {
+		appLogger.Warn("Redis unavailable, skipping the order cache invalidation consumer")
+	}
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -110,6 +151,11 @@ func main() {
 	stopConsumer()
 	if err := paymentsSubscriber.Close(); err != nil {
 		appLogger.Error("Failed to close payments subscriber", zap.Error(err))
+	}
+	if cacheSubscriber != nil {
+		if err := cacheSubscriber.Close(); err != nil {
+			appLogger.Error("Failed to close cache subscriber", zap.Error(err))
+		}
 	}
 
 	relay.Stop()
