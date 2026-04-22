@@ -10,8 +10,11 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/config"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -59,6 +62,55 @@ func TestServer_HealthEndpoints(t *testing.T) {
 		if status.Service != "inventory" {
 			t.Errorf("%s: expected service 'inventory', got %q", path, status.Service)
 		}
+	}
+}
+
+func TestServer_HealthEndpoints_RedisReachable(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "inventory", Version: "1.0.0"},
+	}
+	srv := New(Options{
+		Config:  cfg,
+		Logger:  zaptest.NewLogger(t),
+		Metrics: prometheus.NewRegistry(),
+		Redis:   &database.RedisClient{Client: client},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (body=%s)", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestServer_HealthEndpoints_RedisUnreachable(t *testing.T) {
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 200 * time.Millisecond})
+	t.Cleanup(func() { _ = client.Close() })
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "inventory", Version: "1.0.0"},
+	}
+	srv := New(Options{
+		Config:  cfg,
+		Logger:  zaptest.NewLogger(t),
+		Metrics: prometheus.NewRegistry(),
+		Redis:   &database.RedisClient{Client: client},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d (body=%s)", http.StatusServiceUnavailable, w.Code, w.Body.String())
 	}
 }
 

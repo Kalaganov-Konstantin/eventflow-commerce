@@ -8,6 +8,8 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/handler"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/repository"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/service"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -28,6 +30,8 @@ type Options struct {
 	Logger  *zap.Logger
 	Metrics prometheus.Registerer
 	DB      *database.DB
+	// Redis is optional: a nil client means the service runs without a product cache.
+	Redis *database.RedisClient
 }
 
 // New builds the inventory HTTP server: health checks, metrics and the shared middleware chain.
@@ -37,11 +41,12 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
-	var checks map[string]httpserver.Check
+	checks := make(map[string]httpserver.Check)
 	if opts.DB != nil {
-		checks = map[string]httpserver.Check{
-			"database": opts.DB.PingContext,
-		}
+		checks["database"] = opts.DB.PingContext
+	}
+	if opts.Redis != nil {
+		checks["redis"] = func(ctx context.Context) error { return opts.Redis.Ping(ctx).Err() }
 	}
 
 	mux := http.NewServeMux()
@@ -50,11 +55,13 @@ func New(opts Options) *Server {
 	if opts.DB != nil {
 		stockRepo := repository.NewStockRepository(opts.DB.DB)
 
-		productsHandler := handler.NewProductsHandler(
-			repository.NewProductRepository(opts.DB.DB),
-			stockRepo,
-			opts.Logger,
-		)
+		var productCache service.ProductCache
+		if opts.Redis != nil {
+			productCache = cache.New(opts.Redis, 0)
+		}
+		productService := service.NewProductService(repository.NewProductRepository(opts.DB.DB), productCache)
+
+		productsHandler := handler.NewProductsHandler(productService, stockRepo, opts.Logger)
 		mux.HandleFunc("GET /api/v1/products", productsHandler.List)
 		mux.HandleFunc("GET /api/v1/products/{id}", productsHandler.Get)
 		mux.HandleFunc("GET /api/v1/inventory/{product_id}", productsHandler.Inventory)

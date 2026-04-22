@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"regexp"
 	"testing"
+	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
@@ -25,19 +27,39 @@ type updateCall struct {
 
 // fakeRepository is an in-memory Repository test double.
 type fakeRepository struct {
-	order  *domain.Order
-	getErr error
+	order    *domain.Order
+	getErr   error
+	getCalls int
+
+	saveErr   error
+	saveCalls []*domain.Order
+
+	listResult []*domain.Order
+	listErr    error
 
 	updateErr   error
 	updateCalls []updateCall
 }
 
+func (f *fakeRepository) Save(_ context.Context, order *domain.Order) error {
+	f.saveCalls = append(f.saveCalls, order)
+	return f.saveErr
+}
+
 func (f *fakeRepository) GetByID(_ context.Context, _ uuid.UUID) (*domain.Order, error) {
+	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
 	order := *f.order
 	return &order, nil
+}
+
+func (f *fakeRepository) ListByCustomer(_ context.Context, _ uuid.UUID, _, _ int) ([]*domain.Order, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listResult, nil
 }
 
 func (f *fakeRepository) UpdateStatus(_ context.Context, _ *sql.Tx, id uuid.UUID, status domain.Status, expectedVersion int) error {
@@ -784,4 +806,141 @@ func TestOrderService_FailAfterPayment(t *testing.T) {
 			})
 		}
 	})
+}
+
+// fakeOrderCache is an in-memory OrderCache test double.
+type fakeOrderCache struct {
+	store  map[string][]byte
+	getErr error
+	setErr error
+}
+
+func newFakeOrderCache() *fakeOrderCache {
+	return &fakeOrderCache{store: make(map[string][]byte)}
+}
+
+func (f *fakeOrderCache) GetJSON(_ context.Context, key string, dest any) (bool, error) {
+	if f.getErr != nil {
+		return false, f.getErr
+	}
+	raw, ok := f.store[key]
+	if !ok {
+		return false, nil
+	}
+	return true, json.Unmarshal(raw, dest)
+}
+
+func (f *fakeOrderCache) SetJSON(_ context.Context, key string, value any, _ time.Duration) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	f.store[key] = data
+	return nil
+}
+
+func TestOrderService_GetByID_SecondReadDoesNotHitRepository(t *testing.T) {
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+	svc.SetCache(newFakeOrderCache())
+
+	first, err := svc.GetByID(context.Background(), order.ID)
+	if err != nil {
+		t.Fatalf("GetByID() first call error = %v", err)
+	}
+	if first.ID != order.ID {
+		t.Errorf("GetByID() first call ID = %v, want %v", first.ID, order.ID)
+	}
+	if repo.getCalls != 1 {
+		t.Fatalf("repository GetByID calls after first read = %d, want 1", repo.getCalls)
+	}
+
+	second, err := svc.GetByID(context.Background(), order.ID)
+	if err != nil {
+		t.Fatalf("GetByID() second call error = %v", err)
+	}
+	if second.ID != order.ID {
+		t.Errorf("GetByID() second call ID = %v, want %v", second.ID, order.ID)
+	}
+	if repo.getCalls != 1 {
+		t.Errorf("repository GetByID calls after second read = %d, want 1 (should be served from cache)", repo.getCalls)
+	}
+}
+
+func TestOrderService_GetByID_NoCacheAlwaysReadsRepository(t *testing.T) {
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	if _, err := svc.GetByID(context.Background(), order.ID); err != nil {
+		t.Fatalf("GetByID() first call error = %v", err)
+	}
+	if _, err := svc.GetByID(context.Background(), order.ID); err != nil {
+		t.Fatalf("GetByID() second call error = %v", err)
+	}
+
+	if repo.getCalls != 2 {
+		t.Errorf("repository GetByID calls = %d, want 2 (no cache configured)", repo.getCalls)
+	}
+}
+
+func TestOrderService_GetByID_CacheErrorFallsBackToRepository(t *testing.T) {
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	cache := newFakeOrderCache()
+	cache.getErr = errors.New("redis unavailable")
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+	svc.SetCache(cache)
+
+	got, err := svc.GetByID(context.Background(), order.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v, want nil", err)
+	}
+	if got.ID != order.ID {
+		t.Errorf("GetByID() ID = %v, want %v", got.ID, order.ID)
+	}
+	if repo.getCalls != 1 {
+		t.Errorf("repository GetByID calls = %d, want 1", repo.getCalls)
+	}
+}
+
+func TestOrderService_GetByID_RepositoryError(t *testing.T) {
+	repo := &fakeRepository{getErr: errTestRepository}
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+	svc.SetCache(newFakeOrderCache())
+
+	if _, err := svc.GetByID(context.Background(), uuid.New()); !errors.Is(err, errTestRepository) {
+		t.Errorf("GetByID() error = %v, want %v", err, errTestRepository)
+	}
+}
+
+func TestOrderService_Save_DelegatesToRepository(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	order := newTestOrder(domain.StatusPendingPayment)
+	if err := svc.Save(context.Background(), order); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if len(repo.saveCalls) != 1 || repo.saveCalls[0] != order {
+		t.Errorf("saveCalls = %v, want one call with %v", repo.saveCalls, order)
+	}
+}
+
+func TestOrderService_ListByCustomer_DelegatesToRepository(t *testing.T) {
+	want := []*domain.Order{newTestOrder(domain.StatusPendingPayment)}
+	repo := &fakeRepository{listResult: want}
+	svc := NewOrderService(repo, nil, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	got, err := svc.ListByCustomer(context.Background(), uuid.New(), 10, 0)
+	if err != nil {
+		t.Fatalf("ListByCustomer() error = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListByCustomer() returned %d orders, want %d", len(got), len(want))
+	}
 }

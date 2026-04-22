@@ -10,6 +10,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/handler"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/service"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
@@ -30,6 +31,8 @@ type Options struct {
 	Logger  *zap.Logger
 	Metrics prometheus.Registerer
 	DB      *database.DB
+	// Redis is optional: a nil client means the service runs without an order cache.
+	Redis *database.RedisClient
 }
 
 // New builds the order HTTP server: health checks, metrics and the shared middleware chain.
@@ -39,11 +42,12 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
-	var checks map[string]httpserver.Check
+	checks := make(map[string]httpserver.Check)
 	if opts.DB != nil {
-		checks = map[string]httpserver.Check{
-			"database": opts.DB.PingContext,
-		}
+		checks["database"] = opts.DB.PingContext
+	}
+	if opts.Redis != nil {
+		checks["redis"] = func(ctx context.Context) error { return opts.Redis.Ping(ctx).Err() }
 	}
 
 	mux := http.NewServeMux()
@@ -54,7 +58,10 @@ func New(opts Options) *Server {
 		paymentClient := client.NewPaymentClient(opts.Config.PaymentServiceURL, opts.Config.PaymentClient.Timeout)
 		orderService := service.NewOrderService(
 			repository.NewOrderRepository(opts.DB.DB), opts.DB.DB, repository.NewSagaRepository(opts.DB.DB), inventoryClient, paymentClient)
-		ordersHandler := handler.NewOrdersHandler(repository.NewOrderRepository(opts.DB.DB), inventoryClient, orderService, opts.Logger)
+		if opts.Redis != nil {
+			orderService.SetCache(cache.New(opts.Redis, 0))
+		}
+		ordersHandler := handler.NewOrdersHandler(orderService, inventoryClient, orderService, opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)
 		mux.HandleFunc("GET /api/v1/orders/{id}", ordersHandler.Get)
 		mux.HandleFunc("GET /api/v1/orders", ordersHandler.List)

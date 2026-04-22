@@ -85,6 +85,30 @@ func TestLoadConfig(t *testing.T) {
 		},
 	}
 
+	t.Run("REDIS_POOL_SIZE overrides the default", func(t *testing.T) {
+		clearEnvVars()
+		defer clearEnvVars()
+
+		for key, value := range map[string]string{
+			"INVENTORY_SERVER_PORT":  "8080",
+			"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+			"REDIS_URL":              "redis://localhost:6379",
+			"REDIS_POOL_SIZE":        "50",
+			"KAFKA_BROKERS":          "localhost:9092",
+			"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+		} {
+			os.Setenv(key, value)
+		}
+
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig() unexpected error = %v", err)
+		}
+		if cfg.RedisPoolSize != 50 {
+			t.Errorf("LoadConfig() RedisPoolSize = %v, want 50", cfg.RedisPoolSize)
+		}
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all env vars first
@@ -153,6 +177,9 @@ func TestLoadConfig(t *testing.T) {
 				}
 				if cfg.Outbox.RelayBatchSize != 100 {
 					t.Errorf("LoadConfig() Outbox.RelayBatchSize = %v, want 100", cfg.Outbox.RelayBatchSize)
+				}
+				if cfg.RedisPoolSize != 10 {
+					t.Errorf("LoadConfig() RedisPoolSize = %v, want 10", cfg.RedisPoolSize)
 				}
 			}
 
@@ -238,6 +265,7 @@ func clearEnvVars() {
 		"INVENTORY_SERVICE_PORT",
 		"INVENTORY_DATABASE_URL",
 		"REDIS_URL",
+		"REDIS_POOL_SIZE",
 		"KAFKA_BROKERS",
 		"INVENTORY_KAFKA_GROUP_ID",
 		"JAEGER_ENDPOINT",

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/domain"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/saga"
@@ -14,10 +15,24 @@ import (
 	"github.com/google/uuid"
 )
 
+// orderCacheTTL is how long a cached order read stays valid.
+const orderCacheTTL = 60 * time.Second
+
 // Repository is the persistence port the order service depends on.
 type Repository interface {
+	Save(ctx context.Context, order *domain.Order) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Order, error)
+	ListByCustomer(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*domain.Order, error)
 	UpdateStatus(ctx context.Context, tx *sql.Tx, id uuid.UUID, status domain.Status, expectedVersion int) error
+}
+
+// OrderCache is the cache-aside port GetByID reads and fills for read-only order lookups. A nil
+// OrderCache disables caching, which is how the service degrades when Redis is unavailable at
+// startup. Lifecycle transitions read the repository directly instead, so they never act on a
+// stale cached version.
+type OrderCache interface {
+	GetJSON(ctx context.Context, key string, dest any) (bool, error)
+	SetJSON(ctx context.Context, key string, value any, ttl time.Duration) error
 }
 
 // SagaRepository is the persistence port for the order saga state that accompanies each order
@@ -49,13 +64,59 @@ type OrderService struct {
 	inventory InventoryReleaser
 	payments  PaymentRefunder
 	outbox    *outbox.Store
+	cache     OrderCache
 }
 
 // NewOrderService builds an OrderService backed by repo, sagaRepo, inventory and payments. db is
 // used only for transitions that have no caller-supplied transaction to join, such as
-// MarkPendingPaymentAfterCreate and the saga's durable compensating checkpoint.
+// MarkPendingPaymentAfterCreate and the saga's durable compensating checkpoint. The service
+// starts without a cache; call SetCache to enable one.
 func NewOrderService(repo Repository, db *sql.DB, sagaRepo SagaRepository, inventory InventoryReleaser, payments PaymentRefunder) *OrderService {
 	return &OrderService{repo: repo, db: db, saga: sagaRepo, inventory: inventory, payments: payments, outbox: outbox.NewStore()}
+}
+
+// SetCache attaches cache for GetByID reads. Passing nil disables caching.
+func (s *OrderService) SetCache(cache OrderCache) {
+	s.cache = cache
+}
+
+// Save persists order, delegating to the repository directly.
+func (s *OrderService) Save(ctx context.Context, order *domain.Order) error {
+	return s.repo.Save(ctx, order)
+}
+
+// ListByCustomer returns a page of order summaries for customerID. List reads are not cached,
+// since the pagination combinations make the key space unbounded.
+func (s *OrderService) ListByCustomer(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*domain.Order, error) {
+	return s.repo.ListByCustomer(ctx, customerID, limit, offset)
+}
+
+// GetByID returns the order with the given id for a read-only lookup. When a cache is
+// configured, it is read first and filled on a miss; a cache error falls back to the repository
+// rather than failing the read.
+func (s *OrderService) GetByID(ctx context.Context, id uuid.UUID) (*domain.Order, error) {
+	if s.cache == nil {
+		return s.repo.GetByID(ctx, id)
+	}
+
+	key := orderCacheKey(id)
+
+	var cached domain.Order
+	if hit, err := s.cache.GetJSON(ctx, key, &cached); err == nil && hit {
+		return &cached, nil
+	}
+
+	order, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = s.cache.SetJSON(ctx, key, order, orderCacheTTL)
+	return order, nil
+}
+
+func orderCacheKey(id uuid.UUID) string {
+	return "order:" + id.String()
 }
 
 // MarkPendingPaymentAfterCreate transitions order to pending_payment and enqueues
