@@ -32,6 +32,25 @@ func TestNewRateLimiter(t *testing.T) {
 	}
 }
 
+func TestNewRateLimiter_UsesWindowDurationForCleanupInterval(t *testing.T) {
+	rl := NewRateLimiter(10, 42*time.Second)
+	defer rl.Close()
+
+	if rl.cleanupInterval != 42*time.Second {
+		t.Errorf("cleanupInterval = %v, want the configured window duration (42s)", rl.cleanupInterval)
+	}
+}
+
+func TestNewRateLimiter_DefaultsCleanupIntervalWhenWindowDurationIsNotPositive(t *testing.T) {
+	for _, windowDuration := range []time.Duration{0, -time.Second} {
+		rl := NewRateLimiter(10, windowDuration)
+		if rl.cleanupInterval != defaultCleanupInterval {
+			t.Errorf("windowDuration=%v: cleanupInterval = %v, want %v", windowDuration, rl.cleanupInterval, defaultCleanupInterval)
+		}
+		rl.Close()
+	}
+}
+
 func TestRateLimiter_Allow(t *testing.T) {
 	// Use a very low rate for testing - 3 requests per minute
 	rl := NewRateLimiter(3, time.Minute)

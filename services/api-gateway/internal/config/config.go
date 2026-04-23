@@ -21,6 +21,7 @@ type Config struct {
 	NotificationServiceURL string                `mapstructure:"notification_service_url"`
 	JWTSecret              string                `mapstructure:"jwt_secret"`
 	RateLimit              RateLimitConfig       `mapstructure:"rate_limit"`
+	CircuitBreaker         CircuitBreakerConfig  `mapstructure:"circuit_breaker"`
 	ProxyTimeout           int                   `mapstructure:"proxy_timeout_seconds"`
 }
 
@@ -45,6 +46,28 @@ func (r RateLimitConfig) Validate() error {
 	return nil
 }
 
+// CircuitBreakerConfig sizes the per-backend circuit breaker guarding proxy calls. A zero field
+// falls back to a built-in default when the breaker is constructed, so an unconfigured value is
+// not a validation error; only a negative one is.
+type CircuitBreakerConfig struct {
+	FailureThreshold   int `mapstructure:"failure_threshold"`
+	WindowSeconds      int `mapstructure:"window_seconds"`
+	OpenTimeoutSeconds int `mapstructure:"open_timeout_seconds"`
+}
+
+func (c CircuitBreakerConfig) Validate() error {
+	if c.FailureThreshold < 0 {
+		return fmt.Errorf("circuit breaker failure threshold must not be negative, got %d", c.FailureThreshold)
+	}
+	if c.WindowSeconds < 0 {
+		return fmt.Errorf("circuit breaker window must not be negative, got %d", c.WindowSeconds)
+	}
+	if c.OpenTimeoutSeconds < 0 {
+		return fmt.Errorf("circuit breaker open timeout must not be negative, got %d", c.OpenTimeoutSeconds)
+	}
+	return nil
+}
+
 func LoadConfig() (*Config, error) {
 	var cfg Config
 
@@ -52,6 +75,9 @@ func LoadConfig() (*Config, error) {
 	loader.SetDefault("server.host", "0.0.0.0")
 	loader.SetDefault("rate_limit.requests_per_minute", 100)
 	loader.SetDefault("rate_limit.window_duration_seconds", 60)
+	loader.SetDefault("circuit_breaker.failure_threshold", 5)
+	loader.SetDefault("circuit_breaker.window_seconds", 60)
+	loader.SetDefault("circuit_breaker.open_timeout_seconds", 30)
 	loader.SetDefault("proxy_timeout_seconds", 30)
 	loader.SetDefault("logger.level", "info")
 	loader.SetDefault("logger.environment", "development")
@@ -180,6 +206,11 @@ func (c *Config) Validate() error {
 	// Validate rate limiting configuration
 	if err := c.RateLimit.Validate(); err != nil {
 		return fmt.Errorf("rate limit configuration invalid: %w", err)
+	}
+
+	// Validate circuit breaker configuration
+	if err := c.CircuitBreaker.Validate(); err != nil {
+		return fmt.Errorf("circuit breaker configuration invalid: %w", err)
 	}
 
 	// Final validation of database fields after parsing (which happens in LoadConfig)
