@@ -20,6 +20,7 @@ var errTestRepository = stderrors.New("repository failure")
 type fakeProductRepository struct {
 	productsByID map[uuid.UUID]*domain.Product
 	getErr       error
+	getStale     bool
 
 	listResult   []*domain.Product
 	listErr      error
@@ -29,15 +30,15 @@ type fakeProductRepository struct {
 	lastOffset   int
 }
 
-func (f *fakeProductRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Product, error) {
+func (f *fakeProductRepository) GetByID(_ context.Context, id uuid.UUID) (*domain.Product, bool, error) {
 	if f.getErr != nil {
-		return nil, f.getErr
+		return nil, false, f.getErr
 	}
 	product, ok := f.productsByID[id]
 	if !ok {
-		return nil, apperrors.NewProductNotFound(id.String())
+		return nil, false, apperrors.NewProductNotFound(id.String())
 	}
-	return product, nil
+	return product, f.getStale, nil
 }
 
 func (f *fakeProductRepository) List(_ context.Context, category string, activeOnly bool, limit, offset int) ([]*domain.Product, error) {
@@ -193,17 +194,28 @@ func TestProductsHandler_Get(t *testing.T) {
 	product := &domain.Product{ID: uuid.New(), Name: "Widget", SKU: "WID-1", PriceCents: 999, Currency: "USD"}
 
 	tests := []struct {
-		name       string
-		productID  string
-		repo       *fakeProductRepository
-		wantStatus int
-		wantCode   string
+		name            string
+		productID       string
+		repo            *fakeProductRepository
+		wantStatus      int
+		wantCode        string
+		wantStaleHeader bool
 	}{
 		{
 			name:       "existing product",
 			productID:  product.ID.String(),
 			repo:       &fakeProductRepository{productsByID: map[uuid.UUID]*domain.Product{product.ID: product}},
 			wantStatus: http.StatusOK,
+		},
+		{
+			name:      "stale product served from cache fallback",
+			productID: product.ID.String(),
+			repo: &fakeProductRepository{
+				productsByID: map[uuid.UUID]*domain.Product{product.ID: product},
+				getStale:     true,
+			},
+			wantStatus:      http.StatusOK,
+			wantStaleHeader: true,
 		},
 		{
 			name:       "unknown product id",
@@ -248,6 +260,11 @@ func TestProductsHandler_Get(t *testing.T) {
 				}
 				if got.ID != product.ID.String() {
 					t.Errorf("ID = %v, want %v", got.ID, product.ID.String())
+				}
+
+				gotStaleHeader := w.Header().Get("X-Cache") == "stale"
+				if gotStaleHeader != tt.wantStaleHeader {
+					t.Errorf("X-Cache header present = %v, want %v", gotStaleHeader, tt.wantStaleHeader)
 				}
 				return
 			}

@@ -21,8 +21,10 @@ const (
 )
 
 // ProductRepository is the persistence port the products handler depends on for the catalog.
+// GetByID also reports whether the product was served from a stale cache entry after a database
+// failure, so the handler can surface that to the caller.
 type ProductRepository interface {
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.Product, error)
+	GetByID(ctx context.Context, id uuid.UUID) (product *domain.Product, stale bool, err error)
 	List(ctx context.Context, category string, activeOnly bool, limit, offset int) ([]*domain.Product, error)
 }
 
@@ -116,12 +118,15 @@ func (h *ProductsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	product, err := h.products.GetByID(r.Context(), id)
+	product, stale, err := h.products.GetByID(r.Context(), id)
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 
+	if stale {
+		w.Header().Set("X-Cache", "stale")
+	}
 	h.writeJSON(w, http.StatusOK, newProductResponse(product))
 }
 
