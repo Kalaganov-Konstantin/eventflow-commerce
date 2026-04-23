@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,7 +121,9 @@ func TestInventoryClient_Release(t *testing.T) {
 	})
 
 	t.Run("propagates a service failure", func(t *testing.T) {
+		var calls int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&calls, 1)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"code":"BAD_REQUEST","message":"invalid order id"}`))
@@ -137,5 +140,63 @@ func TestInventoryClient_Release(t *testing.T) {
 		if appErr.Code != "BAD_REQUEST" {
 			t.Errorf("Code = %v, want BAD_REQUEST", appErr.Code)
 		}
+		if got := atomic.LoadInt32(&calls); got != 1 {
+			t.Errorf("calls = %d, want 1 (a rejected request must not be retried)", got)
+		}
 	})
+
+	t.Run("retries a server error then succeeds", func(t *testing.T) {
+		orderID := uuid.New()
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if atomic.AddInt32(&calls, 1) < 2 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		c := NewInventoryClient(srv.URL, time.Second)
+		if err := c.Release(context.Background(), orderID); err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+		if got := atomic.LoadInt32(&calls); got != 2 {
+			t.Errorf("calls = %d, want 2", got)
+		}
+	})
+}
+
+func TestInventoryClient_Reserve_CircuitBreakerSkipsBackendWhileOpen(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewInventoryClient(srv.URL, time.Second)
+
+	// Trip the reserve breaker with breakerFailureThreshold consecutive failures. Reserve is not
+	// retried, so each call to Reserve maps to exactly one request.
+	for i := 0; i < breakerFailureThreshold; i++ {
+		if err := c.Reserve(context.Background(), uuid.New(), testItems()); err == nil {
+			t.Fatalf("call %d: expected an error from the failing backend", i)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != breakerFailureThreshold {
+		t.Fatalf("calls after tripping the breaker = %d, want %d", got, breakerFailureThreshold)
+	}
+
+	err := c.Reserve(context.Background(), uuid.New(), testItems())
+	var appErr *apperrors.AppError
+	if !stderrors.As(err, &appErr) {
+		t.Fatalf("Reserve() error = %v, want *AppError", err)
+	}
+	if appErr.Code != "INVENTORY_SERVICE_UNAVAILABLE" {
+		t.Errorf("Code = %v, want INVENTORY_SERVICE_UNAVAILABLE", appErr.Code)
+	}
+	if got := atomic.LoadInt32(&calls); got != breakerFailureThreshold {
+		t.Errorf("calls after the breaker opened = %d, want still %d (backend must be skipped)", got, breakerFailureThreshold)
+	}
 }

@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,7 +33,9 @@ func TestPaymentClient_Refund(t *testing.T) {
 	})
 
 	t.Run("payment not completed", func(t *testing.T) {
+		var calls int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&calls, 1)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			_, _ = w.Write([]byte(`{"code":"CONFLICT","message":"payment is not completed"}`))
@@ -51,6 +54,31 @@ func TestPaymentClient_Refund(t *testing.T) {
 		}
 		if appErr.HTTPCode != http.StatusConflict {
 			t.Errorf("HTTPCode = %v, want %v", appErr.HTTPCode, http.StatusConflict)
+		}
+		if got := atomic.LoadInt32(&calls); got != 1 {
+			t.Errorf("calls = %d, want 1 (a rejected request must not be retried)", got)
+		}
+	})
+
+	t.Run("retries a server error then succeeds", func(t *testing.T) {
+		paymentID := uuid.New()
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if atomic.AddInt32(&calls, 1) < 2 {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"` + paymentID.String() + `","status":"refunded"}`))
+		}))
+		defer srv.Close()
+
+		c := NewPaymentClient(srv.URL, time.Second)
+		if err := c.Refund(context.Background(), paymentID, "downstream_failure"); err != nil {
+			t.Fatalf("Refund() error = %v", err)
+		}
+		if got := atomic.LoadInt32(&calls); got != 2 {
+			t.Errorf("calls = %d, want 2", got)
 		}
 	})
 
@@ -97,4 +125,36 @@ func TestPaymentClient_Refund(t *testing.T) {
 			t.Errorf("HTTPCode = %v, want %v", appErr.HTTPCode, http.StatusInternalServerError)
 		}
 	})
+}
+
+func TestPaymentClient_Refund_CircuitBreakerSkipsBackendWhileOpen(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := NewPaymentClient(srv.URL, time.Second)
+
+	var lastErr error
+	var appErr *apperrors.AppError
+	for i := 0; i < 5; i++ {
+		lastErr = c.Refund(context.Background(), uuid.New(), "downstream_failure")
+		if stderrors.As(lastErr, &appErr) && appErr.Code == "PAYMENT_SERVICE_UNAVAILABLE" {
+			break
+		}
+	}
+	if !stderrors.As(lastErr, &appErr) || appErr.Code != "PAYMENT_SERVICE_UNAVAILABLE" {
+		t.Fatalf("expected the circuit breaker to open within 5 refund attempts, last error = %v", lastErr)
+	}
+
+	callsAfterOpen := atomic.LoadInt32(&calls)
+
+	if err := c.Refund(context.Background(), uuid.New(), "downstream_failure"); err == nil {
+		t.Fatal("expected Refund() to keep failing while the circuit is open")
+	}
+	if got := atomic.LoadInt32(&calls); got != callsAfterOpen {
+		t.Errorf("calls to backend after the breaker opened = %d, want still %d (backend must be skipped)", got, callsAfterOpen)
+	}
 }
