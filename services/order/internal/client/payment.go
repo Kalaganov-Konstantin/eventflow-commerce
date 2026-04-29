@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
 )
 
@@ -19,6 +20,7 @@ import (
 type PaymentClient struct {
 	baseURL    string
 	httpClient *http.Client
+	breaker    *resilience.Breaker
 }
 
 // NewPaymentClient builds a PaymentClient talking to baseURL, bounding every request by timeout.
@@ -26,6 +28,7 @@ func NewPaymentClient(baseURL string, timeout time.Duration) *PaymentClient {
 	return &PaymentClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{Timeout: timeout},
+		breaker:    newBreaker("payment_refund"),
 	}
 }
 
@@ -34,13 +37,34 @@ type refundRequest struct {
 }
 
 // Refund asks the payment service to refund paymentID. A payment that is not currently completed
-// comes back as an *errors.AppError with HTTP status 409.
+// comes back as an *errors.AppError with HTTP status 409. A refund is idempotent from the payment
+// service's point of view, so Refund is both guarded by a circuit breaker and retried on
+// transient failures.
 func (c *PaymentClient) Refund(ctx context.Context, paymentID uuid.UUID, reason string) error {
 	body, err := json.Marshal(refundRequest{Reason: reason})
 	if err != nil {
 		return fmt.Errorf("marshal refund request: %w", err)
 	}
 
+	retryCfg := resilience.RetryConfig{
+		MaxAttempts: retryMaxAttempts,
+		BaseDelay:   retryBaseDelay,
+		MaxDelay:    retryMaxDelay,
+		Retryable:   isRetryablePaymentError,
+	}
+
+	retryErr := resilience.Retry(ctx, retryCfg, func() error {
+		_, execErr := resilience.Execute(c.breaker, func() (struct{}, error) {
+			return struct{}{}, c.doRefund(ctx, paymentID, body)
+		})
+		return execErr
+	})
+	return wrapBreakerOpen(retryErr, "PAYMENT_SERVICE_UNAVAILABLE", "payment service circuit breaker is open")
+}
+
+// doRefund issues the refund HTTP request and turns a non-2xx response, or a transport failure,
+// into an *errors.AppError.
+func (c *PaymentClient) doRefund(ctx context.Context, paymentID uuid.UUID, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/api/v1/payments/"+paymentID.String()+"/refund", bytes.NewReader(body))
 	if err != nil {
@@ -58,6 +82,20 @@ func (c *PaymentClient) Refund(ctx context.Context, paymentID uuid.UUID, reason 
 		return nil
 	}
 	return paymentErrorFromResponse(resp)
+}
+
+// isRetryablePaymentError reports whether a failed refund call is worth retrying: a transport
+// failure or a server-side error might succeed next time, a rejected request or an open breaker
+// will not.
+func isRetryablePaymentError(err error) bool {
+	if stderrors.Is(err, resilience.ErrOpen) {
+		return false
+	}
+	var appErr *apperrors.AppError
+	if stderrors.As(err, &appErr) {
+		return appErr.HTTPCode >= http.StatusInternalServerError
+	}
+	return false
 }
 
 // paymentTransportError maps a failure to reach the payment service to an *errors.AppError,

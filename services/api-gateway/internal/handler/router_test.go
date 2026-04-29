@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/sony/gobreaker/v2"
 	"go.uber.org/zap"
 )
 
@@ -818,6 +820,102 @@ func TestNotFoundHandler_UnknownAPIRoute(t *testing.T) {
 
 	if response.Code != "NOT_FOUND" {
 		t.Errorf("Expected code 'NOT_FOUND', got %q", response.Code)
+	}
+}
+
+func TestProxyToService_CircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	backendURL := backend.URL
+	backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backendURL,
+		ProxyTimeout:    1,
+		CircuitBreaker: config.CircuitBreakerConfig{
+			FailureThreshold:   2,
+			WindowSeconds:      60,
+			OpenTimeoutSeconds: 60,
+		},
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	// The first two requests reach the (dead) backend and fail, tripping the breaker.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("request %d: expected status %d, got %d", i, http.StatusServiceUnavailable, w.Code)
+		}
+	}
+
+	if state := router.proxies[backendOrder].breaker.State(); state != gobreaker.StateOpen {
+		t.Fatalf("breaker state = %v, want open after consecutive failures", state)
+	}
+
+	// Once the breaker is open, no further request should reach the (dead) backend either, but
+	// the response is still a clean 503 rather than a proxy connection-refused error.
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, w.Code)
+	}
+
+	var response ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if response.Code != "SERVICE_UNAVAILABLE" {
+		t.Errorf("Code = %q, want SERVICE_UNAVAILABLE", response.Code)
+	}
+}
+
+func TestProxyToService_CircuitBreakerSkipsBackendWhileOpen(t *testing.T) {
+	var calls int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		OrderServiceURL: backend.URL,
+		ProxyTimeout:    5,
+		CircuitBreaker: config.CircuitBreakerConfig{
+			FailureThreshold:   1,
+			WindowSeconds:      60,
+			OpenTimeoutSeconds: 60,
+		},
+	}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+	router.SetupRoutes()
+
+	// First request reaches the backend, fails with a 5xx and trips the breaker (threshold 1).
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if calls := atomic.LoadInt32(&calls); calls != 1 {
+		t.Fatalf("calls to backend after first request = %d, want 1", calls)
+	}
+
+	// Second request must be short-circuited: no additional call to the backend.
+	req2 := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, w2.Code)
+	}
+	if calls := atomic.LoadInt32(&calls); calls != 1 {
+		t.Errorf("calls to backend after second request = %d, want still 1 (breaker should skip the backend)", calls)
 	}
 }
 

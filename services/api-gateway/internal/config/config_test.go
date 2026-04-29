@@ -234,6 +234,58 @@ func TestRateLimitConfigValidate(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerConfigValidate(t *testing.T) {
+	testCases := []struct {
+		name        string
+		config      CircuitBreakerConfig
+		expectError bool
+	}{
+		{
+			name:        "Zero value falls back to defaults, not an error",
+			config:      CircuitBreakerConfig{},
+			expectError: false,
+		},
+		{
+			name: "Valid explicit config",
+			config: CircuitBreakerConfig{
+				FailureThreshold:   5,
+				WindowSeconds:      60,
+				OpenTimeoutSeconds: 30,
+			},
+			expectError: false,
+		},
+		{
+			name:        "Negative failure threshold",
+			config:      CircuitBreakerConfig{FailureThreshold: -1},
+			expectError: true,
+		},
+		{
+			name:        "Negative window",
+			config:      CircuitBreakerConfig{WindowSeconds: -1},
+			expectError: true,
+		},
+		{
+			name:        "Negative open timeout",
+			config:      CircuitBreakerConfig{OpenTimeoutSeconds: -1},
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.config.Validate()
+
+			if tc.expectError && err == nil {
+				t.Error("Expected validation error, but got none")
+			}
+
+			if !tc.expectError && err != nil {
+				t.Errorf("Expected no validation error, but got: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateServiceURL(t *testing.T) {
 	cfg := &Config{}
 

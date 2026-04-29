@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,8 +13,16 @@ import (
 	"time"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+)
+
+// Default circuit breaker settings used when the configuration leaves a field unset (zero).
+const (
+	defaultBreakerFailureThreshold = 5
+	defaultBreakerWindow           = 60 * time.Second
+	defaultBreakerOpenTimeout      = 30 * time.Second
 )
 
 // Backend names used both as proxy map keys and metric labels.
@@ -56,11 +65,13 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// backendProxy pairs a parsed backend target with its pre-built reverse proxy.
+// backendProxy pairs a parsed backend target with its pre-built reverse proxy and the circuit
+// breaker guarding calls to it.
 type backendProxy struct {
-	name   string
-	target *url.URL
-	proxy  *httputil.ReverseProxy
+	name    string
+	target  *url.URL
+	proxy   *httputil.ReverseProxy
+	breaker *resilience.Breaker
 }
 
 // ErrorResponse defines the structure for error responses
@@ -105,7 +116,8 @@ func NewRouter(cfg *config.Config, logger *zap.Logger, metrics *Metrics, startTi
 }
 
 // newBackendProxy parses a backend service URL and builds its reverse proxy
-// once, wiring header propagation into the proxy's Director.
+// once, wiring header propagation into the proxy's Director, plus a dedicated
+// circuit breaker for calls to this backend.
 func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
 	target, err := url.Parse(rawURL)
 	if err != nil {
@@ -123,7 +135,41 @@ func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
 		r.proxyErrorHandler(w, req, err, name)
 	}
 
-	return &backendProxy{name: name, target: target, proxy: proxy}, nil
+	breaker := resilience.NewBreaker(resilience.Config{
+		Name:             name,
+		FailureThreshold: breakerFailureThreshold(r.config),
+		Window:           breakerWindow(r.config),
+		OpenTimeout:      breakerOpenTimeout(r.config),
+	})
+
+	return &backendProxy{name: name, target: target, proxy: proxy, breaker: breaker}, nil
+}
+
+// breakerFailureThreshold returns the configured circuit breaker failure threshold, or the
+// built-in default when cfg leaves it unset.
+func breakerFailureThreshold(cfg *config.Config) uint32 {
+	if cfg == nil || cfg.CircuitBreaker.FailureThreshold <= 0 {
+		return defaultBreakerFailureThreshold
+	}
+	return uint32(cfg.CircuitBreaker.FailureThreshold)
+}
+
+// breakerWindow returns the configured circuit breaker closed-state counting window, or the
+// built-in default when cfg leaves it unset.
+func breakerWindow(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.CircuitBreaker.WindowSeconds <= 0 {
+		return defaultBreakerWindow
+	}
+	return time.Duration(cfg.CircuitBreaker.WindowSeconds) * time.Second
+}
+
+// breakerOpenTimeout returns the configured circuit breaker open-state recovery timeout, or the
+// built-in default when cfg leaves it unset.
+func breakerOpenTimeout(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.CircuitBreaker.OpenTimeoutSeconds <= 0 {
+		return defaultBreakerOpenTimeout
+	}
+	return time.Duration(cfg.CircuitBreaker.OpenTimeoutSeconds) * time.Second
 }
 
 // SetupRoutes configures all routes
@@ -258,7 +304,9 @@ func (r *Router) createProxyHandler(name string) http.HandlerFunc {
 }
 
 // proxyToService forwards the request through the pre-built reverse proxy for
-// the named backend. The backend receives the full request path.
+// the named backend, gated by that backend's circuit breaker: while the
+// breaker is open the request never reaches the backend and the caller gets
+// an immediate 503. The backend receives the full request path.
 func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name string) {
 	bp := r.proxies[name]
 
@@ -275,10 +323,46 @@ func (r *Router) proxyToService(w http.ResponseWriter, req *http.Request, name s
 	start := time.Now()
 	recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
-	bp.proxy.ServeHTTP(recorder, req)
+	_, err := resilience.Execute(bp.breaker, func() (struct{}, error) {
+		bp.proxy.ServeHTTP(recorder, req)
+		if recorder.statusCode >= http.StatusInternalServerError {
+			return struct{}{}, fmt.Errorf("backend %s responded with status %d", name, recorder.statusCode)
+		}
+		return struct{}{}, nil
+	})
+
+	// A breaker-open error means the proxy never ran, so nothing has written a response yet;
+	// any other error was already turned into a response by proxyErrorHandler or came straight
+	// from the backend, so there is nothing left to write here.
+	if stderrors.Is(err, resilience.ErrOpen) {
+		r.writeCircuitOpenResponse(recorder, name)
+	}
 
 	if r.metrics != nil {
 		r.metrics.RecordProxyRequest(name, req.Method, recorder.statusCode, time.Since(start))
+	}
+}
+
+// writeCircuitOpenResponse answers a request short-circuited by an open breaker with a 503
+// instead of forwarding it to a backend that is being given time to recover.
+func (r *Router) writeCircuitOpenResponse(w http.ResponseWriter, name string) {
+	if r.metrics != nil {
+		r.metrics.RecordProxyError(name, "SERVICE_UNAVAILABLE")
+	}
+
+	response := ErrorResponse{
+		Error: "Backend service is unavailable",
+		Code:  "SERVICE_UNAVAILABLE",
+		Details: map[string]string{
+			"target_service": name,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		r.logger.Error("Failed to encode circuit open response", zap.Error(err))
 	}
 }
 

@@ -14,8 +14,46 @@ import (
 	"time"
 
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
 )
+
+// Default circuit breaker and retry settings shared by the order service's remote clients.
+const (
+	breakerFailureThreshold = 5
+	breakerWindow           = 60 * time.Second
+	breakerOpenTimeout      = 30 * time.Second
+
+	retryMaxAttempts = 3
+	retryBaseDelay   = 50 * time.Millisecond
+	retryMaxDelay    = 500 * time.Millisecond
+)
+
+// newBreaker builds a circuit breaker configured with the order client's default thresholds,
+// named for the specific remote operation it guards.
+func newBreaker(name string) *resilience.Breaker {
+	return resilience.NewBreaker(resilience.Config{
+		Name:             name,
+		FailureThreshold: breakerFailureThreshold,
+		Window:           breakerWindow,
+		OpenTimeout:      breakerOpenTimeout,
+	})
+}
+
+// wrapBreakerOpen turns a resilience.ErrOpen into an *apperrors.AppError with code and message,
+// so callers only ever see the client's usual AppError shape. Any other error, including nil, is
+// returned unchanged.
+func wrapBreakerOpen(err error, code, message string) error {
+	if err == nil || !stderrors.Is(err, resilience.ErrOpen) {
+		return err
+	}
+	return &apperrors.AppError{
+		Code:     code,
+		Message:  message,
+		Details:  err.Error(),
+		HTTPCode: http.StatusServiceUnavailable,
+	}
+}
 
 // ReserveItem is a single product/quantity pair to reserve or that was reserved.
 type ReserveItem struct {
@@ -25,16 +63,20 @@ type ReserveItem struct {
 
 // InventoryClient reserves and releases stock through the inventory service's HTTP API.
 type InventoryClient struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL        string
+	httpClient     *http.Client
+	reserveBreaker *resilience.Breaker
+	releaseBreaker *resilience.Breaker
 }
 
 // NewInventoryClient builds an InventoryClient talking to baseURL, bounding every request by
 // timeout.
 func NewInventoryClient(baseURL string, timeout time.Duration) *InventoryClient {
 	return &InventoryClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{Timeout: timeout},
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		httpClient:     &http.Client{Timeout: timeout},
+		reserveBreaker: newBreaker("inventory_reserve"),
+		releaseBreaker: newBreaker("inventory_release"),
 	}
 }
 
@@ -50,6 +92,9 @@ type reserveRequest struct {
 
 // Reserve asks the inventory service to reserve items for orderID. A stock shortage comes back as
 // an *errors.AppError with code INSUFFICIENT_INVENTORY and HTTP status 409.
+//
+// Reserve is guarded by a circuit breaker but not retried: reserving is not idempotent without an
+// idempotency key, so a retried call after an ambiguous failure could double-reserve stock.
 func (c *InventoryClient) Reserve(ctx context.Context, orderID uuid.UUID, items []ReserveItem) error {
 	reqItems := make([]reserveItemRequest, len(items))
 	for i, item := range items {
@@ -61,13 +106,44 @@ func (c *InventoryClient) Reserve(ctx context.Context, orderID uuid.UUID, items 
 		return fmt.Errorf("marshal reserve request: %w", err)
 	}
 
-	return c.do(ctx, http.MethodPost, "/api/v1/inventory/reservations", body)
+	_, execErr := resilience.Execute(c.reserveBreaker, func() (struct{}, error) {
+		return struct{}{}, c.do(ctx, http.MethodPost, "/api/v1/inventory/reservations", body)
+	})
+	return wrapBreakerOpen(execErr, "INVENTORY_SERVICE_UNAVAILABLE", "inventory service circuit breaker is open")
 }
 
 // Release asks the inventory service to release every reservation held for orderID. Releasing an
-// order with no active reservation is not an error.
+// order with no active reservation is not an error, so Release is both guarded by a circuit
+// breaker and retried on transient failures.
 func (c *InventoryClient) Release(ctx context.Context, orderID uuid.UUID) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/inventory/reservations/"+orderID.String(), nil)
+	retryCfg := resilience.RetryConfig{
+		MaxAttempts: retryMaxAttempts,
+		BaseDelay:   retryBaseDelay,
+		MaxDelay:    retryMaxDelay,
+		Retryable:   isRetryableInventoryError,
+	}
+
+	err := resilience.Retry(ctx, retryCfg, func() error {
+		_, execErr := resilience.Execute(c.releaseBreaker, func() (struct{}, error) {
+			return struct{}{}, c.do(ctx, http.MethodDelete, "/api/v1/inventory/reservations/"+orderID.String(), nil)
+		})
+		return execErr
+	})
+	return wrapBreakerOpen(err, "INVENTORY_SERVICE_UNAVAILABLE", "inventory service circuit breaker is open")
+}
+
+// isRetryableInventoryError reports whether a failed inventory call is worth retrying: a
+// transport failure or a server-side error might succeed next time, a rejected request or an
+// open breaker will not.
+func isRetryableInventoryError(err error) bool {
+	if stderrors.Is(err, resilience.ErrOpen) {
+		return false
+	}
+	var appErr *apperrors.AppError
+	if stderrors.As(err, &appErr) {
+		return appErr.HTTPCode >= http.StatusInternalServerError
+	}
+	return false
 }
 
 // do issues an HTTP request against the inventory service and turns a non-2xx response, or a

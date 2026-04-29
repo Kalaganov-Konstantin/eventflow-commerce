@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory/internal/domain"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 var errTestProductRepository = errors.New("repository failure")
@@ -90,23 +91,29 @@ func TestProductService_GetByID_SecondReadDoesNotHitRepository(t *testing.T) {
 	cache := newFakeProductCache()
 	svc := NewProductService(repo, cache)
 
-	first, err := svc.GetByID(context.Background(), product.ID)
+	first, stale, err := svc.GetByID(context.Background(), product.ID)
 	if err != nil {
 		t.Fatalf("GetByID() first call error = %v", err)
 	}
 	if first.ID != product.ID {
 		t.Errorf("GetByID() first call ID = %v, want %v", first.ID, product.ID)
 	}
+	if stale {
+		t.Error("GetByID() first call stale = true, want false")
+	}
 	if repo.getCalls != 1 {
 		t.Fatalf("repository GetByID calls after first read = %d, want 1", repo.getCalls)
 	}
 
-	second, err := svc.GetByID(context.Background(), product.ID)
+	second, stale, err := svc.GetByID(context.Background(), product.ID)
 	if err != nil {
 		t.Fatalf("GetByID() second call error = %v", err)
 	}
 	if second.ID != product.ID {
 		t.Errorf("GetByID() second call ID = %v, want %v", second.ID, product.ID)
+	}
+	if stale {
+		t.Error("GetByID() second call stale = true, want false")
 	}
 	if repo.getCalls != 1 {
 		t.Errorf("repository GetByID calls after second read = %d, want 1 (should be served from cache)", repo.getCalls)
@@ -118,10 +125,10 @@ func TestProductService_GetByID_NilCacheAlwaysReadsRepository(t *testing.T) {
 	repo := &fakeProductRepository{product: product}
 	svc := NewProductService(repo, nil)
 
-	if _, err := svc.GetByID(context.Background(), product.ID); err != nil {
+	if _, _, err := svc.GetByID(context.Background(), product.ID); err != nil {
 		t.Fatalf("GetByID() first call error = %v", err)
 	}
-	if _, err := svc.GetByID(context.Background(), product.ID); err != nil {
+	if _, _, err := svc.GetByID(context.Background(), product.ID); err != nil {
 		t.Fatalf("GetByID() second call error = %v", err)
 	}
 
@@ -134,7 +141,7 @@ func TestProductService_GetByID_RepositoryError(t *testing.T) {
 	repo := &fakeProductRepository{getErr: errTestProductRepository}
 	svc := NewProductService(repo, newFakeProductCache())
 
-	if _, err := svc.GetByID(context.Background(), uuid.New()); !errors.Is(err, errTestProductRepository) {
+	if _, _, err := svc.GetByID(context.Background(), uuid.New()); !errors.Is(err, errTestProductRepository) {
 		t.Errorf("GetByID() error = %v, want %v", err, errTestProductRepository)
 	}
 }
@@ -146,15 +153,83 @@ func TestProductService_GetByID_CacheErrorFallsBackToRepository(t *testing.T) {
 	cache.getErr = errors.New("redis unavailable")
 	svc := NewProductService(repo, cache)
 
-	got, err := svc.GetByID(context.Background(), product.ID)
+	got, stale, err := svc.GetByID(context.Background(), product.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v, want nil", err)
 	}
 	if got.ID != product.ID {
 		t.Errorf("GetByID() ID = %v, want %v", got.ID, product.ID)
 	}
+	if stale {
+		t.Error("GetByID() stale = true, want false")
+	}
 	if repo.getCalls != 1 {
 		t.Errorf("repository GetByID calls = %d, want 1", repo.getCalls)
+	}
+}
+
+// warmUpThenExpireFastEntry populates both the fast cache-aside entry and the long-lived fallback
+// entry for product through a successful read, then removes only the fast entry, simulating it
+// having expired while the fallback entry, written with a much longer TTL, survives.
+func warmUpThenExpireFastEntry(t *testing.T, svc *ProductService, cache *fakeProductCache, product *domain.Product) {
+	t.Helper()
+	if _, _, err := svc.GetByID(context.Background(), product.ID); err != nil {
+		t.Fatalf("GetByID() warm-up call error = %v", err)
+	}
+	delete(cache.store, productCacheKey(product.ID))
+}
+
+func TestProductService_GetByID_RepositoryErrorFallsBackToStaleCache(t *testing.T) {
+	product := newTestProduct()
+	repo := &fakeProductRepository{product: product}
+	cache := newFakeProductCache()
+	svc := NewProductService(repo, cache)
+
+	warmUpThenExpireFastEntry(t, svc, cache, product)
+	repo.getErr = errTestProductRepository
+
+	got, stale, err := svc.GetByID(context.Background(), product.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v, want nil (should fall back to the cache)", err)
+	}
+	if got == nil || got.ID != product.ID {
+		t.Fatalf("GetByID() = %+v, want the cached product %+v", got, product)
+	}
+	if !stale {
+		t.Error("GetByID() stale = false, want true")
+	}
+}
+
+func TestProductService_GetByID_RepositoryErrorRecordsFallbackMetric(t *testing.T) {
+	product := newTestProduct()
+	repo := &fakeProductRepository{product: product}
+	cache := newFakeProductCache()
+	svc := NewProductService(repo, cache)
+
+	warmUpThenExpireFastEntry(t, svc, cache, product)
+	repo.getErr = errTestProductRepository
+
+	before := testutil.ToFloat64(productCacheFallbackTotal)
+
+	if _, stale, err := svc.GetByID(context.Background(), product.ID); err != nil || !stale {
+		t.Fatalf("GetByID() = (stale=%v, err=%v), want (stale=true, err=nil)", stale, err)
+	}
+
+	after := testutil.ToFloat64(productCacheFallbackTotal)
+	if after != before+1 {
+		t.Errorf("fallback metric = %v, want %v", after, before+1)
+	}
+}
+
+func TestProductService_GetByID_RepositoryErrorWithNothingCachedReturnsRepositoryError(t *testing.T) {
+	repo := &fakeProductRepository{getErr: errTestProductRepository}
+	cache := newFakeProductCache()
+	svc := NewProductService(repo, cache)
+
+	// The normal cache-aside read above already misses (nothing was ever cached for this id), so
+	// there is no stale value to fall back to.
+	if _, stale, err := svc.GetByID(context.Background(), uuid.New()); !errors.Is(err, errTestProductRepository) || stale {
+		t.Errorf("GetByID() = (stale=%v, err=%v), want (stale=false, err=%v)", stale, err, errTestProductRepository)
 	}
 }
 

@@ -51,18 +51,25 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// defaultCleanupInterval is used when NewRateLimiter is called with a non-positive
+// windowDuration.
+const defaultCleanupInterval = 5 * time.Minute
+
 // RateLimiter manages rate limiting per client using golang.org/x/time/rate
 type RateLimiter struct {
-	limiters   map[string]*rate.Limiter
-	mutex      sync.RWMutex
-	rate       rate.Limit
-	burst      int
-	maxClients int
-	done       chan struct{}
+	limiters        map[string]*rate.Limiter
+	mutex           sync.RWMutex
+	rate            rate.Limit
+	burst           int
+	maxClients      int
+	cleanupInterval time.Duration
+	done            chan struct{}
 }
 
-// NewRateLimiter creates a new rate limiter using token bucket algorithm
-func NewRateLimiter(requestsPerMinute int, _ time.Duration) *RateLimiter {
+// NewRateLimiter creates a new rate limiter using token bucket algorithm. windowDuration also
+// sets how often the stale-client cleanup goroutine runs; a non-positive value falls back to
+// defaultCleanupInterval.
+func NewRateLimiter(requestsPerMinute int, windowDuration time.Duration) *RateLimiter {
 	if requestsPerMinute <= 0 {
 		requestsPerMinute = 1 // Minimum rate to avoid division by zero
 	}
@@ -78,12 +85,18 @@ func NewRateLimiter(requestsPerMinute int, _ time.Duration) *RateLimiter {
 		burstSize = requestsPerMinute/3 + 2
 	}
 
+	cleanupInterval := windowDuration
+	if cleanupInterval <= 0 {
+		cleanupInterval = defaultCleanupInterval
+	}
+
 	rl := &RateLimiter{
-		limiters:   make(map[string]*rate.Limiter),
-		rate:       rateLimit,
-		burst:      burstSize,
-		maxClients: 10000,
-		done:       make(chan struct{}),
+		limiters:        make(map[string]*rate.Limiter),
+		rate:            rateLimit,
+		burst:           burstSize,
+		maxClients:      10000,
+		cleanupInterval: cleanupInterval,
+		done:            make(chan struct{}),
 	}
 
 	// Start cleanup goroutine
@@ -141,7 +154,7 @@ func (rl *RateLimiter) evictOldestClients() {
 
 // cleanup periodically removes inactive limiters
 func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute) // Cleanup every 5 minutes
+	ticker := time.NewTicker(rl.cleanupInterval)
 
 	defer func() {
 		ticker.Stop()
