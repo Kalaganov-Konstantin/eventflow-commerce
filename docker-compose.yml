@@ -14,7 +14,7 @@ services:
       - API_GATEWAY_DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
-      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - ORDER_SERVICE_URL=${ORDER_SERVICE_URL}
       - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL}
       - INVENTORY_SERVICE_URL=${INVENTORY_SERVICE_URL}
@@ -62,7 +62,7 @@ services:
       - ORDER_DATABASE_URL=${ORDER_DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
-      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - INVENTORY_SERVICE_URL=${INVENTORY_SERVICE_URL}
       - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL}
     depends_on:
@@ -105,7 +105,7 @@ services:
       - PAYMENT_DATABASE_URL=${PAYMENT_DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
-      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,7 +146,7 @@ services:
       - INVENTORY_DATABASE_URL=${INVENTORY_DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
-      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -191,7 +191,7 @@ services:
       - NOTIFICATION_SMTP_USER=${SMTP_USER}
       - NOTIFICATION_SMTP_PASSWORD=${SMTP_PASSWORD}
       - REDIS_URL=${REDIS_URL}
-      - JAEGER_ENDPOINT=${JAEGER_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -350,6 +350,8 @@ services:
 
   jaeger:
     image: jaegertracing/all-in-one:latest
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
     ports:
       - "${JAEGER_AGENT_ZIPKIN_PORT}:5775/udp"
       - "${JAEGER_AGENT_COMPACT_PORT}:6831/udp"
@@ -359,6 +361,8 @@ services:
       - "${JAEGER_JAEGER_THRIFT_PORT}:14268"
       - "${JAEGER_JAEGER_BINARY_PORT}:14250"
       - "${JAEGER_ZIPKIN_PORT}:9411"
+      - "${JAEGER_OTLP_GRPC_PORT}:4317"
+      - "${JAEGER_OTLP_HTTP_PORT}:4318"
 
 volumes:
   postgres_data:
