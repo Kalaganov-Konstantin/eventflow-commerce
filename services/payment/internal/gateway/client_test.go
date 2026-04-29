@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	stderrors "errors"
 	"testing"
 
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
+	"github.com/sony/gobreaker/v2"
 )
 
 func TestStubClient_Charge(t *testing.T) {
@@ -73,5 +76,57 @@ func TestStubClient_Charge_IsDeterministic(t *testing.T) {
 
 	if first != second {
 		t.Errorf("Charge() is not deterministic: first = %+v, second = %+v", first, second)
+	}
+}
+
+var errGatewayDown = stderrors.New("gateway down")
+
+func TestStubClient_Charge_DeclinesWithGatewayUnavailableWhenBreakerIsOpen(t *testing.T) {
+	client := NewStubClient(Config{MaxAmountCents: 1000})
+
+	// The stub itself never fails, so trip its breaker directly, standing in for a real provider
+	// failing repeatedly.
+	for i := 0; i < breakerFailureThreshold; i++ {
+		if _, err := resilience.Execute(client.breaker, func() (Result, error) {
+			return Result{}, errGatewayDown
+		}); !stderrors.Is(err, errGatewayDown) {
+			t.Fatalf("priming failure %d: error = %v, want errGatewayDown", i, err)
+		}
+	}
+
+	result, err := client.Charge(context.Background(), ChargeRequest{
+		PaymentID:   uuid.New(),
+		AmountCents: 500,
+		Currency:    "USD",
+	})
+	if err != nil {
+		t.Fatalf("Charge() error = %v, want nil (an open circuit must decline, not error)", err)
+	}
+	if result.Approved {
+		t.Error("Approved = true, want false while the circuit breaker is open")
+	}
+	if result.DeclineCode != gatewayUnavailableDeclineCode {
+		t.Errorf("DeclineCode = %q, want %q", result.DeclineCode, gatewayUnavailableDeclineCode)
+	}
+	if result.TransactionID != "" {
+		t.Errorf("TransactionID = %q, want empty", result.TransactionID)
+	}
+}
+
+func TestStubClient_Charge_StaysClosedUnderNormalOperation(t *testing.T) {
+	client := NewStubClient(Config{MaxAmountCents: 1000})
+
+	for i := 0; i < breakerFailureThreshold+2; i++ {
+		if _, err := client.Charge(context.Background(), ChargeRequest{
+			PaymentID:   uuid.New(),
+			AmountCents: 500,
+			Currency:    "USD",
+		}); err != nil {
+			t.Fatalf("Charge() call %d error = %v, want nil", i, err)
+		}
+	}
+
+	if client.breaker.State() != gobreaker.StateClosed {
+		t.Errorf("breaker state = %v, want closed", client.breaker.State())
 	}
 }
