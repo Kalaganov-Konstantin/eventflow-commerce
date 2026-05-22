@@ -19,32 +19,32 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Valid configuration",
 			envVars: map[string]string{
-				"INVENTORY_SERVER_PORT":  "8080",
-				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"REDIS_URL":              "redis://localhost:6379",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_SERVER_PORT":       "8080",
+				"INVENTORY_DATABASE_URL":      "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
 			name: "INVENTORY_SERVICE_PORT still works as fallback",
 			envVars: map[string]string{
-				"INVENTORY_SERVICE_PORT": "8080",
-				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"REDIS_URL":              "redis://localhost:6379",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_SERVICE_PORT":      "8080",
+				"INVENTORY_DATABASE_URL":      "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
 			name: "Missing both port variables",
 			envVars: map[string]string{
-				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"REDIS_URL":              "redis://localhost:6379",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_DATABASE_URL":      "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "INVENTORY_SERVER_PORT (or INVENTORY_SERVICE_PORT) environment variable is not set",
@@ -52,10 +52,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Missing INVENTORY_DATABASE_URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVER_PORT": "8080",
-				"REDIS_URL":             "redis://localhost:6379",
-				"KAFKA_BROKERS":         "localhost:9092",
-				"JAEGER_ENDPOINT":       "http://localhost:14268/api/traces",
+				"INVENTORY_SERVER_PORT":       "8080",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "INVENTORY_DATABASE_URL environment variable is not set",
@@ -63,11 +63,11 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Invalid database URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVER_PORT":  "8080",
-				"INVENTORY_DATABASE_URL": "invalid-url",
-				"REDIS_URL":              "redis://localhost:6379",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_SERVER_PORT":       "8080",
+				"INVENTORY_DATABASE_URL":      "invalid-url",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "database host is required",
@@ -75,10 +75,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Missing Redis URL",
 			envVars: map[string]string{
-				"INVENTORY_SERVER_PORT":  "8080",
-				"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-				"KAFKA_BROKERS":          "localhost:9092",
-				"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+				"INVENTORY_SERVER_PORT":       "8080",
+				"INVENTORY_DATABASE_URL":      "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "REDIS_URL environment variable is not set",
@@ -90,12 +90,12 @@ func TestLoadConfig(t *testing.T) {
 		defer clearEnvVars()
 
 		for key, value := range map[string]string{
-			"INVENTORY_SERVER_PORT":  "8080",
-			"INVENTORY_DATABASE_URL": "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
-			"REDIS_URL":              "redis://localhost:6379",
-			"REDIS_POOL_SIZE":        "50",
-			"KAFKA_BROKERS":          "localhost:9092",
-			"JAEGER_ENDPOINT":        "http://localhost:14268/api/traces",
+			"INVENTORY_SERVER_PORT":       "8080",
+			"INVENTORY_DATABASE_URL":      "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+			"REDIS_URL":                   "redis://localhost:6379",
+			"REDIS_POOL_SIZE":             "50",
+			"KAFKA_BROKERS":               "localhost:9092",
+			"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 		} {
 			os.Setenv(key, value)
 		}
@@ -268,7 +268,7 @@ func clearEnvVars() {
 		"REDIS_POOL_SIZE",
 		"KAFKA_BROKERS",
 		"INVENTORY_KAFKA_GROUP_ID",
-		"JAEGER_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)

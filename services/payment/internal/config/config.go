@@ -70,7 +70,7 @@ func LoadConfig() (*Config, error) {
 	if err := loader.BindEnv("kafka.group_id", "PAYMENT_KAFKA_GROUP_ID"); err != nil {
 		return nil, fmt.Errorf("failed to bind kafka.group_id: %w", err)
 	}
-	if err := loader.BindEnv("jaeger.endpoint", "JAEGER_ENDPOINT"); err != nil {
+	if err := loader.BindEnv("jaeger.endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
 		return nil, fmt.Errorf("failed to bind jaeger.endpoint: %w", err)
 	}
 
@@ -125,7 +125,7 @@ func (c *Config) Validate() error {
 
 	// Validation for Jaeger
 	if c.Jaeger.Endpoint == "" {
-		return fmt.Errorf("JAEGER_ENDPOINT environment variable is not set")
+		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT environment variable is not set")
 	}
 
 	// Final validation of database fields after parsing (which happens in LoadConfig)

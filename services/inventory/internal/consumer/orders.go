@@ -20,7 +20,7 @@ type StockService interface {
 // subscriber is the subset of *events.Subscriber used by OrdersConsumer, extracted so tests can
 // substitute a fake.
 type subscriber interface {
-	Subscribe(ctx context.Context, handler func(events.Event) error) error
+	Subscribe(ctx context.Context, handler func(context.Context, events.Event) error) error
 }
 
 // OrdersConsumer applies order lifecycle events to stock reservations. Each event is handled
@@ -40,9 +40,7 @@ func NewOrdersConsumer(sub *events.Subscriber, db *sql.DB, processed *events.Pro
 
 // Start consumes orders.events until ctx is cancelled or the subscriber fails.
 func (c *OrdersConsumer) Start(ctx context.Context) error {
-	return c.subscriber.Subscribe(ctx, func(event events.Event) error {
-		return c.handle(ctx, event)
-	})
+	return c.subscriber.Subscribe(ctx, c.handle)
 }
 
 // handle applies event to the reservations of the order it references.
