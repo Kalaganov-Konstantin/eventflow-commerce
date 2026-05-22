@@ -16,6 +16,7 @@ import (
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Default circuit breaker and retry settings shared by the order service's remote clients.
@@ -70,11 +71,12 @@ type InventoryClient struct {
 }
 
 // NewInventoryClient builds an InventoryClient talking to baseURL, bounding every request by
-// timeout.
+// timeout. Every request opens a client span and carries the current trace context to the
+// inventory service.
 func NewInventoryClient(baseURL string, timeout time.Duration) *InventoryClient {
 	return &InventoryClient{
 		baseURL:        strings.TrimRight(baseURL, "/"),
-		httpClient:     &http.Client{Timeout: timeout},
+		httpClient:     &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		reserveBreaker: newBreaker("inventory_reserve"),
 		releaseBreaker: newBreaker("inventory_release"),
 	}

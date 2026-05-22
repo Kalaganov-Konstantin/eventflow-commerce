@@ -28,9 +28,7 @@ func NewCacheConsumer(sub *events.Subscriber, cache OrderCache, logger *zap.Logg
 
 // Start consumes orders.events until ctx is cancelled or the subscriber fails.
 func (c *CacheConsumer) Start(ctx context.Context) error {
-	return c.subscriber.Subscribe(ctx, func(event events.Event) error {
-		return c.handle(ctx, event)
-	})
+	return c.subscriber.Subscribe(ctx, c.handle)
 }
 
 // handle deletes the cached order entry affected by event. An event with no recognizable order

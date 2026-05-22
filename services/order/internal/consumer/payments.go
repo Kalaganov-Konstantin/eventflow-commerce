@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
+	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -20,7 +21,7 @@ type OrderService interface {
 // subscriber is the subset of *events.Subscriber used by PaymentsConsumer, extracted so tests
 // can substitute a fake.
 type subscriber interface {
-	Subscribe(ctx context.Context, handler func(events.Event) error) error
+	Subscribe(ctx context.Context, handler func(context.Context, events.Event) error) error
 }
 
 // PaymentsConsumer applies payment results to orders. Each event is handled inside a single
@@ -30,19 +31,17 @@ type PaymentsConsumer struct {
 	db         *sql.DB
 	processed  *events.ProcessedStore
 	orders     OrderService
-	logger     *zap.Logger
+	logger     *sharedlogger.Logger
 }
 
 // NewPaymentsConsumer builds a PaymentsConsumer backed by sub, db, processed and orders.
-func NewPaymentsConsumer(sub *events.Subscriber, db *sql.DB, processed *events.ProcessedStore, orders OrderService, logger *zap.Logger) *PaymentsConsumer {
+func NewPaymentsConsumer(sub *events.Subscriber, db *sql.DB, processed *events.ProcessedStore, orders OrderService, logger *sharedlogger.Logger) *PaymentsConsumer {
 	return &PaymentsConsumer{subscriber: sub, db: db, processed: processed, orders: orders, logger: logger}
 }
 
 // Start consumes payments.events until ctx is cancelled or the subscriber fails.
 func (c *PaymentsConsumer) Start(ctx context.Context) error {
-	return c.subscriber.Subscribe(ctx, func(event events.Event) error {
-		return c.handle(ctx, event)
-	})
+	return c.subscriber.Subscribe(ctx, c.handle)
 }
 
 // handle applies event to the order it references. Unknown event types are skipped without
@@ -54,7 +53,7 @@ func (c *PaymentsConsumer) handle(ctx context.Context, event events.Event) error
 
 	orderID, err := orderIDFromEvent(event)
 	if err != nil {
-		c.logger.Error("dropping payment event with an invalid order id", zap.String("event_id", event.ID), zap.Error(err))
+		c.logger.WithTracing(ctx).Error("dropping payment event with an invalid order id", zap.String("event_id", event.ID), zap.Error(err))
 		return nil
 	}
 
