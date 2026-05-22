@@ -96,7 +96,7 @@ func TestSubscriber_ProcessMessage_CommitsAfterHandlerSuccess(t *testing.T) {
 	reader := &fakeReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
-	sub.processMessage(context.Background(), msg, func(Event) error { return nil })
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return nil })
 
 	if len(reader.committed) != 1 {
 		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
@@ -109,7 +109,7 @@ func TestSubscriber_ProcessMessage_CommitsAfterSuccessfulDLQWrite(t *testing.T) 
 	dlq := &fakeWriter{}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
 
-	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
 
 	if len(dlq.written) != 1 {
 		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
@@ -125,7 +125,7 @@ func TestSubscriber_ProcessMessage_DoesNotCommitWhenHandlerFailsAndDLQUnavailabl
 	dlq := &fakeWriter{err: errors.New("dlq unreachable")}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
 
-	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
 
 	if len(reader.committed) != 0 {
 		t.Fatalf("committed = %d messages, want 0 when handler fails and the DLQ is unavailable", len(reader.committed))
@@ -137,7 +137,7 @@ func TestSubscriber_ProcessMessage_DoesNotCommitWhenDLQNotConfigured(t *testing.
 	reader := &fakeReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
-	sub.processMessage(context.Background(), msg, func(Event) error { return errors.New("boom") })
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
 
 	if len(reader.committed) != 0 {
 		t.Fatalf("committed = %d messages, want 0 when handler fails and no DLQ is configured", len(reader.committed))
@@ -151,7 +151,7 @@ func TestSubscriber_ProcessMessage_RetriesBeforeGivingUp(t *testing.T) {
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 3, retryBaseDelay: time.Millisecond}
 
 	var calls int
-	sub.processMessage(context.Background(), msg, func(Event) error {
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error {
 		calls++
 		if calls < 3 {
 			return errors.New("transient failure")
@@ -177,7 +177,7 @@ func TestSubscriber_ProcessMessage_SendsToDLQAfterRetriesExhausted(t *testing.T)
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 2, retryBaseDelay: time.Millisecond}
 
 	var calls int
-	sub.processMessage(context.Background(), msg, func(Event) error {
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error {
 		calls++
 		return errors.New("permanent failure")
 	})
