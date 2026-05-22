@@ -98,7 +98,7 @@ func LoadConfig() (*Config, error) {
 	if err := loader.BindEnv("kafka.brokers", "KAFKA_BROKERS"); err != nil {
 		return nil, fmt.Errorf("failed to bind kafka.brokers: %w", err)
 	}
-	if err := loader.BindEnv("jaeger.endpoint", "JAEGER_ENDPOINT"); err != nil {
+	if err := loader.BindEnv("jaeger.endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
 		return nil, fmt.Errorf("failed to bind jaeger.endpoint: %w", err)
 	}
 	if err := loader.BindEnv("order_service_url", "ORDER_SERVICE_URL"); err != nil {
@@ -167,7 +167,7 @@ func (c *Config) Validate() error {
 
 	// Validation for Jaeger
 	if c.Jaeger.Endpoint == "" {
-		return fmt.Errorf("JAEGER_ENDPOINT environment variable is not set")
+		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT environment variable is not set")
 	}
 
 	// Validation for Service URLs

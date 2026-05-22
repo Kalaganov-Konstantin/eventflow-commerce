@@ -15,6 +15,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/resilience"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
 )
 
@@ -134,6 +135,14 @@ func (r *Router) newBackendProxy(name, rawURL string) (*backendProxy, error) {
 	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
 		r.proxyErrorHandler(w, req, err, name)
 	}
+	// otelhttp.NewTransport both opens a client span for each proxied call and injects the
+	// current trace context into the outgoing request headers, so the backend continues the
+	// same trace.
+	proxy.Transport = otelhttp.NewTransport(http.DefaultTransport,
+		otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
+			return req.Method + " " + name
+		}),
+	)
 
 	breaker := resilience.NewBreaker(resilience.Config{
 		Name:             name,
@@ -450,6 +459,24 @@ func (r *Router) getClientIP(req *http.Request) string {
 // isValidIP validates if the string is a valid IP address
 func (r *Router) isValidIP(ip string) bool {
 	return net.ParseIP(ip) != nil
+}
+
+// SpanName derives a low-cardinality span name for req, so identifiers in the path (an order id,
+// a product id) do not each create a distinct span name.
+func SpanName(req *http.Request) string {
+	return req.Method + " " + routePath(req.URL.Path)
+}
+
+// routePath collapses path to its route: the leading "/api/v1/<resource>" segments, or the
+// top-level segment for anything shorter (like "/health"), dropping identifiers and sub-resources
+// beneath it.
+func routePath(path string) string {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	const maxRouteSegments = 3
+	if len(segments) > maxRouteSegments {
+		segments = segments[:maxRouteSegments]
+	}
+	return "/" + strings.Join(segments, "/")
 }
 
 // notFoundHandler answers requests under /api/v1/ that do not match a known
