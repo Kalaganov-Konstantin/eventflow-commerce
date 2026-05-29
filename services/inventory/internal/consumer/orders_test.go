@@ -36,8 +36,8 @@ type fakeSubscriber struct {
 	event events.Event
 }
 
-func (f *fakeSubscriber) Subscribe(_ context.Context, handler func(events.Event) error) error {
-	return handler(f.event)
+func (f *fakeSubscriber) Subscribe(ctx context.Context, handler func(context.Context, events.Event) error) error {
+	return handler(ctx, f.event)
 }
 
 func newOrderEvent(eventType, orderID string) events.Event {

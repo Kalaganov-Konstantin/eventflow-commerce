@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/client"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
@@ -17,6 +18,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
 )
 
@@ -74,10 +76,18 @@ func New(opts Options) *Server {
 		middleware.Logging(opts.Logger),
 	)
 	wrappedHandler := chain(httpMetrics.Middleware(mux))
+	// otelhttp.NewHandler opens a server span for every request; the span name uses the route
+	// rather than the full path, so requests for different order ids do not each mint a
+	// distinct span name.
+	tracedHandler := otelhttp.NewHandler(wrappedHandler, "order",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + routePath(r.URL.Path)
+		}),
+	)
 
 	outer := http.NewServeMux()
 	outer.Handle("/metrics", promhttp.Handler())
-	outer.Handle("/", wrappedHandler)
+	outer.Handle("/", tracedHandler)
 
 	runtime := httpserver.New(httpserver.Options{
 		Addr:    opts.Config.Server.Host + ":" + opts.Config.Server.Port,
@@ -101,4 +111,16 @@ func (s *Server) Stop(ctx context.Context) error {
 // Handler returns the server's top-level handler, useful for tests.
 func (s *Server) Handler() http.Handler {
 	return s.runtime.Handler()
+}
+
+// routePath collapses path to its route: the leading "/api/v1/<resource>" segments, or the
+// top-level segment for anything shorter (like "/health"), dropping identifiers and
+// sub-resources beneath it so span names stay low cardinality.
+func routePath(path string) string {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	const maxRouteSegments = 3
+	if len(segments) > maxRouteSegments {
+		segments = segments[:maxRouteSegments]
+	}
+	return "/" + strings.Join(segments, "/")
 }

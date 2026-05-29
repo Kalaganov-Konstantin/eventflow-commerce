@@ -5,6 +5,8 @@ import logging
 import uuid
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
+from opentelemetry import propagate, trace
+from opentelemetry.trace import SpanKind
 
 from notification.config.config import KafkaConfig
 from notification.senders.base import Sender, deliver
@@ -12,6 +14,7 @@ from notification.storage import notifications as storage
 from notification.templates.renderer import render_template
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 ORDERS_TOPIC = "orders.events"
 PAYMENTS_TOPIC = "payments.events"
@@ -119,6 +122,13 @@ class Consumer:
             await self._process(message)
 
     async def _process(self, message) -> None:
+        parent_ctx = _extract_trace_context(message.headers)
+        with tracer.start_as_current_span(
+            f"{message.topic} process", context=parent_ctx, kind=SpanKind.CONSUMER
+        ):
+            await self._process_traced(message)
+
+    async def _process_traced(self, message) -> None:
         try:
             event = json.loads(message.value)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
@@ -152,3 +162,9 @@ class Consumer:
 
 def create_consumer(config: KafkaConfig, pool, sender: Sender) -> Consumer:
     return Consumer(build_kafka_consumer(config), build_kafka_producer(config), pool, sender)
+
+
+def _extract_trace_context(headers):
+    """Build a parent context from a kafka message's trace headers, if any were carried."""
+    carrier = {key: value.decode() for key, value in (headers or []) if value is not None}
+    return propagate.extract(carrier)

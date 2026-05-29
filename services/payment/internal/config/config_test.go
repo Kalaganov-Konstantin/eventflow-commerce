@@ -19,32 +19,32 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Valid configuration",
 			envVars: map[string]string{
-				"PAYMENT_SERVER_PORT":  "8080",
-				"PAYMENT_DATABASE_URL": "postgres://user:pass@localhost:5432/payment?sslmode=disable",
-				"REDIS_URL":            "redis://localhost:6379",
-				"KAFKA_BROKERS":        "localhost:9092",
-				"JAEGER_ENDPOINT":      "http://localhost:14268/api/traces",
+				"PAYMENT_SERVER_PORT":         "8080",
+				"PAYMENT_DATABASE_URL":        "postgres://user:pass@localhost:5432/payment?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
 			name: "PAYMENT_SERVICE_PORT still works as fallback",
 			envVars: map[string]string{
-				"PAYMENT_SERVICE_PORT": "8080",
-				"PAYMENT_DATABASE_URL": "postgres://user:pass@localhost:5432/payment?sslmode=disable",
-				"REDIS_URL":            "redis://localhost:6379",
-				"KAFKA_BROKERS":        "localhost:9092",
-				"JAEGER_ENDPOINT":      "http://localhost:14268/api/traces",
+				"PAYMENT_SERVICE_PORT":        "8080",
+				"PAYMENT_DATABASE_URL":        "postgres://user:pass@localhost:5432/payment?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: false,
 		},
 		{
 			name: "Missing both port variables",
 			envVars: map[string]string{
-				"PAYMENT_DATABASE_URL": "postgres://user:pass@localhost:5432/payment?sslmode=disable",
-				"REDIS_URL":            "redis://localhost:6379",
-				"KAFKA_BROKERS":        "localhost:9092",
-				"JAEGER_ENDPOINT":      "http://localhost:14268/api/traces",
+				"PAYMENT_DATABASE_URL":        "postgres://user:pass@localhost:5432/payment?sslmode=disable",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "PAYMENT_SERVER_PORT (or PAYMENT_SERVICE_PORT) environment variable is not set",
@@ -52,10 +52,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Missing PAYMENT_DATABASE_URL",
 			envVars: map[string]string{
-				"PAYMENT_SERVER_PORT": "8080",
-				"REDIS_URL":           "redis://localhost:6379",
-				"KAFKA_BROKERS":       "localhost:9092",
-				"JAEGER_ENDPOINT":     "http://localhost:14268/api/traces",
+				"PAYMENT_SERVER_PORT":         "8080",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "PAYMENT_DATABASE_URL environment variable is not set",
@@ -63,11 +63,11 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Invalid database URL",
 			envVars: map[string]string{
-				"PAYMENT_SERVER_PORT":  "8080",
-				"PAYMENT_DATABASE_URL": "invalid-url",
-				"REDIS_URL":            "redis://localhost:6379",
-				"KAFKA_BROKERS":        "localhost:9092",
-				"JAEGER_ENDPOINT":      "http://localhost:14268/api/traces",
+				"PAYMENT_SERVER_PORT":         "8080",
+				"PAYMENT_DATABASE_URL":        "invalid-url",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "database host is required",
@@ -75,10 +75,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "Missing REDIS_URL",
 			envVars: map[string]string{
-				"PAYMENT_SERVER_PORT":  "8080",
-				"PAYMENT_DATABASE_URL": "postgres://user:pass@localhost:5432/payment?sslmode=disable",
-				"KAFKA_BROKERS":        "localhost:9092",
-				"JAEGER_ENDPOINT":      "http://localhost:14268/api/traces",
+				"PAYMENT_SERVER_PORT":         "8080",
+				"PAYMENT_DATABASE_URL":        "postgres://user:pass@localhost:5432/payment?sslmode=disable",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
 			},
 			wantErr: true,
 			errMsg:  "REDIS_URL environment variable is not set",
@@ -240,7 +240,7 @@ func clearEnvVars() {
 		"REDIS_URL",
 		"KAFKA_BROKERS",
 		"PAYMENT_KAFKA_GROUP_ID",
-		"JAEGER_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)

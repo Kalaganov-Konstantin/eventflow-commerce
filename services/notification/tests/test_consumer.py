@@ -40,11 +40,12 @@ class FakeSender:
 
 
 class FakeConsumerRecord:
-    def __init__(self, topic, partition, offset, value):
+    def __init__(self, topic, partition, offset, value, headers=()):
         self.topic = topic
         self.partition = partition
         self.offset = offset
         self.value = value
+        self.headers = headers
 
 
 class FakeKafkaConsumer:

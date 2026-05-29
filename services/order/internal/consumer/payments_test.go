@@ -9,6 +9,7 @@ import (
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
+	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"github.com/google/uuid"
 	"go.uber.org/zap/zaptest"
 )
@@ -38,8 +39,8 @@ type fakeSubscriber struct {
 	event events.Event
 }
 
-func (f *fakeSubscriber) Subscribe(_ context.Context, handler func(events.Event) error) error {
-	return handler(f.event)
+func (f *fakeSubscriber) Subscribe(ctx context.Context, handler func(context.Context, events.Event) error) error {
+	return handler(ctx, f.event)
 }
 
 func newPaymentEvent(eventType, orderID string) events.Event {
@@ -56,7 +57,7 @@ func newConsumer(t *testing.T, db *sql.DB, orders OrderService) *PaymentsConsume
 		db:        db,
 		processed: events.NewProcessedStore(db),
 		orders:    orders,
-		logger:    zaptest.NewLogger(t),
+		logger:    &sharedlogger.Logger{Logger: zaptest.NewLogger(t)},
 	}
 }
 

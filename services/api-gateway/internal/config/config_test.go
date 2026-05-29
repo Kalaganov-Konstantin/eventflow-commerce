@@ -362,7 +362,7 @@ func TestLoadConfig(t *testing.T) {
 		"API_GATEWAY_SERVER_PORT":        "8080",
 		"REDIS_URL":                      "redis:6379",
 		"KAFKA_BROKERS":                  "kafka:9092",
-		"JAEGER_ENDPOINT":                "jaeger:14268",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":    "jaeger:14268",
 	}
 
 	// Set environment variables
@@ -401,16 +401,16 @@ func TestLoadConfig(t *testing.T) {
 
 func TestLoadConfig_PortFallsBackToLegacyVariable(t *testing.T) {
 	envVars := map[string]string{
-		"JWT_SECRET":               "this-is-a-very-long-secret-key-for-jwt-validation",
-		"ORDER_SERVICE_URL":        "http://order:8080",
-		"PAYMENT_SERVICE_URL":      "http://payment:8080",
-		"INVENTORY_SERVICE_URL":    "http://inventory:8080",
-		"NOTIFICATION_SERVICE_URL": "http://notification:8080",
-		"API_GATEWAY_DATABASE_URL": "postgres://test:test@postgres:5432/test?sslmode=disable",
-		"API_GATEWAY_PORT":         "9090",
-		"REDIS_URL":                "redis:6379",
-		"KAFKA_BROKERS":            "kafka:9092",
-		"JAEGER_ENDPOINT":          "jaeger:14268",
+		"JWT_SECRET":                  "this-is-a-very-long-secret-key-for-jwt-validation",
+		"ORDER_SERVICE_URL":           "http://order:8080",
+		"PAYMENT_SERVICE_URL":         "http://payment:8080",
+		"INVENTORY_SERVICE_URL":       "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL":    "http://notification:8080",
+		"API_GATEWAY_DATABASE_URL":    "postgres://test:test@postgres:5432/test?sslmode=disable",
+		"API_GATEWAY_PORT":            "9090",
+		"REDIS_URL":                   "redis:6379",
+		"KAFKA_BROKERS":               "kafka:9092",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:14268",
 	}
 
 	for key, value := range envVars {

@@ -20,6 +20,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
+	sharedtracing "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/tracing"
 	"go.uber.org/zap"
 )
 
@@ -48,6 +49,22 @@ func main() {
 		zap.String("host", cfg.Server.Host),
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", cfg.Service.Version))
+
+	shutdownTracing, err := sharedtracing.Init(context.Background(), sharedtracing.Config{
+		ServiceName:    cfg.Service.Name,
+		ServiceVersion: cfg.Service.Version,
+		Endpoint:       cfg.Jaeger.Endpoint,
+	})
+	if err != nil {
+		appLogger.Fatal("Failed to initialize tracing", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			appLogger.Error("Failed to shut down tracing", zap.Error(err))
+		}
+	}()
 
 	db, err := database.NewPostgresConnection(database.PostgresConfig{
 		URL:          cfg.DatabaseURL,

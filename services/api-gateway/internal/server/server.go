@@ -10,6 +10,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/handler"
 	sharedmw "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap"
 )
 
@@ -67,6 +68,14 @@ func NewServer(opts Options) (*Server, error) {
 	finalHandler = recordRequestMetrics(metrics)(finalHandler)
 	finalHandler = forwardRequestID(finalHandler)
 	finalHandler = sharedmw.Chain(sharedmw.Recovery(opts.Logger), sharedmw.RequestID)(finalHandler)
+	// otelhttp.NewHandler opens a server span for every incoming request; the span name uses the
+	// route rather than the full path, so requests for different order ids do not each mint a
+	// distinct span name.
+	finalHandler = otelhttp.NewHandler(finalHandler, "api-gateway",
+		otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
+			return handler.SpanName(req)
+		}),
+	)
 
 	// Mount the router with middleware chain
 	mux.Handle("/", finalHandler)

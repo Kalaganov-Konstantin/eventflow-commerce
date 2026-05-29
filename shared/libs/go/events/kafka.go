@@ -59,6 +59,7 @@ type Publisher struct {
 
 type Subscriber struct {
 	reader         kafkaReader
+	topic          string
 	logger         *zap.Logger
 	dlqWriter      kafkaWriter
 	maxRetries     int
@@ -107,6 +108,7 @@ func NewSubscriber(config KafkaConfig, topic string, logger *zap.Logger) *Subscr
 
 	return &Subscriber{
 		reader:         reader,
+		topic:          topic,
 		logger:         logger,
 		dlqWriter:      dlqWriter,
 		maxRetries:     maxRetries,
@@ -155,13 +157,23 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 		})
 	}
 
-	return p.writer.WriteMessages(ctx, message)
+	ctx, span := startProducerSpan(ctx, topic)
+	defer span.End()
+	injectTraceContext(ctx, &message.Headers)
+
+	if err := p.writer.WriteMessages(ctx, message); err != nil {
+		span.RecordError(err)
+		return err
+	}
+	return nil
 }
 
 // Subscribe fetches messages one at a time and only commits an offset after the message was
 // either handled successfully or safely handed off to the DLQ, so a handler failure combined
-// with an unavailable DLQ leaves the offset uncommitted for redelivery.
-func (s *Subscriber) Subscribe(ctx context.Context, handler func(Event) error) error {
+// with an unavailable DLQ leaves the offset uncommitted for redelivery. handler receives a
+// context carrying a consumer span that is a child of the span that published the message, when
+// the message carries trace headers.
+func (s *Subscriber) Subscribe(ctx context.Context, handler func(context.Context, Event) error) error {
 	for {
 		msg, err := s.reader.FetchMessage(ctx)
 		if err != nil {
@@ -178,16 +190,21 @@ func (s *Subscriber) Subscribe(ctx context.Context, handler func(Event) error) e
 
 // processMessage unmarshals and handles a single fetched message, routing failures to the DLQ
 // and committing the offset only once the message has been safely dealt with.
-func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, handler func(Event) error) {
+func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, handler func(context.Context, Event) error) {
+	msgCtx, span := startConsumerSpan(ctx, s.topic, msg.Headers)
+	defer span.End()
+
 	var event Event
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
 		s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
+		span.RecordError(err)
 		s.handleFailure(ctx, msg, "unmarshal_error")
 		return
 	}
 
-	if err := s.handleWithRetry(ctx, event, handler); err != nil {
+	if err := s.handleWithRetry(msgCtx, event, handler); err != nil {
 		s.logger.Error("Failed to handle event after retries", zap.Error(err), zap.String("event_id", event.ID))
+		span.RecordError(err)
 		s.handleFailure(ctx, msg, "handler_error")
 		return
 	}
@@ -197,13 +214,13 @@ func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, hand
 
 // handleWithRetry calls handler, retrying up to maxRetries times with exponential backoff and
 // jitter between attempts before giving up.
-func (s *Subscriber) handleWithRetry(ctx context.Context, event Event, handler func(Event) error) error {
-	err := handler(event)
+func (s *Subscriber) handleWithRetry(ctx context.Context, event Event, handler func(context.Context, Event) error) error {
+	err := handler(ctx, event)
 	for attempt := 1; err != nil && attempt <= s.maxRetries; attempt++ {
 		if waitErr := s.wait(ctx, s.retryDelay(attempt)); waitErr != nil {
 			return waitErr
 		}
-		err = handler(event)
+		err = handler(ctx, event)
 	}
 	return err
 }

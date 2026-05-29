@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,9 @@ class Config(BaseSettings):
     database: DatabaseConfig
     kafka: KafkaConfig = KafkaConfig()
     smtp: SMTPConfig = SMTPConfig()
+    # Unprefixed like the Go services' OTEL_EXPORTER_OTLP_ENDPOINT: one collector endpoint shared
+    # by every service, not a per-service setting.
+    otlp_endpoint: str = Field(default="", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
 
     model_config = SettingsConfigDict(
         env_prefix="NOTIFICATION_",

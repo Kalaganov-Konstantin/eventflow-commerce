@@ -12,6 +12,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway/internal/server"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	sharedtracing "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/tracing"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +43,22 @@ func main() {
 		zap.String("host", cfg.Server.Host),
 		zap.String("port", cfg.Server.Port),
 		zap.String("version", cfg.Service.Version))
+
+	shutdownTracing, err := sharedtracing.Init(context.Background(), sharedtracing.Config{
+		ServiceName:    cfg.Service.Name,
+		ServiceVersion: cfg.Service.Version,
+		Endpoint:       cfg.Jaeger.Endpoint,
+	})
+	if err != nil {
+		logger.Fatal("Failed to initialize tracing", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			logger.Error("Failed to shut down tracing", zap.Error(err))
+		}
+	}()
 
 	// Create and start server
 	srv, err := server.NewServer(server.Options{
