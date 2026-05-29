@@ -10,11 +10,13 @@ from .config.config import load_config
 from .consumer import create_consumer
 from .senders.email import EmailSender
 from .storage.notifications import create_pool
+from .tracing import setup_tracing
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
+    setup_tracing(app, config.otlp_endpoint)
     pool = await create_pool(config.database.url)
     consumer = create_consumer(config.kafka, pool, EmailSender(config.smtp))
     await consumer.start()
