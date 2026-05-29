@@ -20,8 +20,10 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	sharedtracing "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/tracing"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -83,6 +85,7 @@ func main() {
 		appLogger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 	defer func() { _ = db.Close() }()
+	prometheus.MustRegister(metrics.NewDatabaseMetrics(db.DB, cfg.Service.Name))
 
 	redisClient, err := database.NewRedisConnection(database.RedisConfig{
 		URL:      cfg.Redis.URL,
