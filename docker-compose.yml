@@ -328,6 +328,36 @@ services:
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
       KAFKA_CLUSTERS_0_JMXPORT: ${KAFKA_JMX_PORT}
 
+  # Exporters
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    ports:
+      - "${POSTGRES_EXPORTER_PORT}:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: ${REDIS_URL}
+    ports:
+      - "${REDIS_EXPORTER_PORT}:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    command: ["--kafka.server=${KAFKA_BROKERS}"]
+    ports:
+      - "${KAFKA_EXPORTER_PORT}:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   # Monitoring
   prometheus:
     image: prom/prometheus:latest
