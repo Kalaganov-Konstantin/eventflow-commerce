@@ -1,0 +1,138 @@
+{
+  "title": "Service Health",
+  "uid": "eventflow-service-health",
+  "tags": ["eventflow-commerce", "health"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Requests per second by service",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (rate({__name__=~\"api_gateway_requests_total|order_http_requests_total|payment_http_requests_total|inventory_http_requests_total\"}[$__rate_interval]))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "5xx error rate by service",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (rate({__name__=~\"api_gateway_requests_total|order_http_requests_total|payment_http_requests_total|inventory_http_requests_total\", status_code=~\"5..\"}[$__rate_interval]))\n/\nsum by (job) (rate({__name__=~\"api_gateway_requests_total|order_http_requests_total|payment_http_requests_total|inventory_http_requests_total\"}[$__rate_interval]))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "p50 request latency",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, job) (rate({__name__=~\"api_gateway_request_duration_seconds_bucket|order_http_request_duration_seconds_bucket|payment_http_request_duration_seconds_bucket|inventory_http_request_duration_seconds_bucket\"}[$__rate_interval])))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "p99 request latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, job) (rate({__name__=~\"api_gateway_request_duration_seconds_bucket|order_http_request_duration_seconds_bucket|payment_http_request_duration_seconds_bucket|inventory_http_request_duration_seconds_bucket\"}[$__rate_interval])))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0, "max": 2 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "circuit_breaker_state",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cache hits and misses",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cache) (rate(cache_hits_total[$__rate_interval]))",
+          "legendFormat": "{{cache}} hits"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (cache) (rate(cache_misses_total[$__rate_interval]))",
+          "legendFormat": "{{cache}} misses"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Database connections by service",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "db_connections_open",
+          "legendFormat": "{{service}} open"
+        },
+        {
+          "refId": "B",
+          "expr": "db_connections_in_use",
+          "legendFormat": "{{service}} in use"
+        },
+        {
+          "refId": "C",
+          "expr": "db_connections_idle",
+          "legendFormat": "{{service}} idle"
+        }
+      ]
+    }
+  ]
+}
