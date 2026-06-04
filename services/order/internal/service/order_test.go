@@ -15,6 +15,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/saga"
 	apperrors "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/errors"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var errTestRepository = errors.New("repository failure")
@@ -138,6 +139,200 @@ func newTestOrder(status domain.Status) *domain.Order {
 		TotalAmountCents: 1998,
 		Currency:         "USD",
 		Version:          1,
+	}
+}
+
+// counterValue reads the current value of the counter metric named name off registry.
+func counterValue(t *testing.T, registry *prometheus.Registry, name string) float64 {
+	t.Helper()
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() == name {
+			return mf.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("metric %s not found", name)
+	return 0
+}
+
+func TestOrderService_ConfirmPayment_RecordsSagaCompletedMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	registry := prometheus.NewRegistry()
+	svc.SetSagaMetrics(saga.NewMetrics(registry))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+
+	if err := svc.ConfirmPayment(context.Background(), tx, order.ID); err != nil {
+		t.Fatalf("ConfirmPayment() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if got := counterValue(t, registry, "order_saga_completed_total"); got != 1 {
+		t.Errorf("order_saga_completed_total = %v, want 1", got)
+	}
+	if got := counterValue(t, registry, "order_saga_compensated_total"); got != 0 {
+		t.Errorf("order_saga_compensated_total = %v, want 0", got)
+	}
+}
+
+func TestOrderService_ConfirmPayment_TerminalOrderDoesNotRecordMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	order := newTestOrder(domain.StatusConfirmed)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	registry := prometheus.NewRegistry()
+	svc.SetSagaMetrics(saga.NewMetrics(registry))
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+	if err := svc.ConfirmPayment(context.Background(), tx, order.ID); err != nil {
+		t.Fatalf("ConfirmPayment() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if got := counterValue(t, registry, "order_saga_completed_total"); got != 0 {
+		t.Errorf("order_saga_completed_total = %v, want 0 for an already-terminal order", got)
+	}
+}
+
+func TestOrderService_FailPayment_RecordsSagaCompensatedMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	registry := prometheus.NewRegistry()
+	svc.SetSagaMetrics(saga.NewMetrics(registry))
+
+	mock.ExpectBegin() // the caller's transaction, opened below
+	mock.ExpectBegin() // markCompensating's own transaction
+	mock.ExpectCommit()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+	if err := svc.FailPayment(context.Background(), tx, order.ID); err != nil {
+		t.Fatalf("FailPayment() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if got := counterValue(t, registry, "order_saga_compensated_total"); got != 1 {
+		t.Errorf("order_saga_compensated_total = %v, want 1", got)
+	}
+	if got := counterValue(t, registry, "order_saga_completed_total"); got != 0 {
+		t.Errorf("order_saga_completed_total = %v, want 0", got)
+	}
+}
+
+func TestOrderService_FailAfterPayment_RecordsSagaCompensatedMetric(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	registry := prometheus.NewRegistry()
+	svc.SetSagaMetrics(saga.NewMetrics(registry))
+
+	mock.ExpectBegin() // the caller's transaction, opened below
+	mock.ExpectBegin() // markCompensating's own transaction
+	mock.ExpectCommit()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+	if err := svc.FailAfterPayment(context.Background(), tx, order.ID, uuid.New(), "downstream_failure"); err != nil {
+		t.Fatalf("FailAfterPayment() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if got := counterValue(t, registry, "order_saga_compensated_total"); got != 1 {
+		t.Errorf("order_saga_compensated_total = %v, want 1", got)
+	}
+}
+
+func TestOrderService_ConfirmPayment_NoSagaMetricsConfiguredDoesNotPanic(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	order := newTestOrder(domain.StatusPendingPayment)
+	repo := &fakeRepository{order: order}
+	svc := NewOrderService(repo, db, &fakeSagaRepository{}, &fakeInventoryReleaser{}, &fakePaymentRefunder{})
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+	if err := svc.ConfirmPayment(context.Background(), tx, order.ID); err != nil {
+		t.Fatalf("ConfirmPayment() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
 	}
 }
 

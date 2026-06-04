@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
@@ -187,6 +189,86 @@ func TestSubscriber_ProcessMessage_SendsToDLQAfterRetriesExhausted(t *testing.T)
 	}
 	if len(dlq.written) != 1 {
 		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
+	}
+}
+
+func TestPublisher_Publish_RecordsPublishedMetric(t *testing.T) {
+	writer := &fakeWriter{}
+	registry := prometheus.NewRegistry()
+	m := NewKafkaMetrics(registry)
+	pub := &Publisher{writer: writer, metrics: m}
+
+	err := pub.Publish(context.Background(), OrdersTopic, Event{ID: "evt-1", Type: "order.created"})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	if got := testutil.ToFloat64(m.published.WithLabelValues(OrdersTopic, "order.created")); got != 1 {
+		t.Errorf("published total = %v, want 1", got)
+	}
+}
+
+func TestPublisher_Publish_NoMetricsConfiguredDoesNotPanic(t *testing.T) {
+	pub := &Publisher{writer: &fakeWriter{}}
+
+	if err := pub.Publish(context.Background(), OrdersTopic, Event{ID: "evt-1"}); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+}
+
+func TestSubscriber_ProcessMessage_RecordsConsumedMetricOnSuccess(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	registry := prometheus.NewRegistry()
+	m := NewKafkaMetrics(registry)
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic, metrics: m}
+
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return nil })
+
+	if got := testutil.ToFloat64(m.consumed.WithLabelValues(OrdersTopic, "order.created")); got != 1 {
+		t.Errorf("consumed total = %v, want 1", got)
+	}
+}
+
+func TestSubscriber_ProcessMessage_RecordsDLQMetricOnHandlerFailure(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	registry := prometheus.NewRegistry()
+	m := NewKafkaMetrics(registry)
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic, dlqWriter: dlq, metrics: m}
+
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
+
+	if got := testutil.ToFloat64(m.dlq.WithLabelValues(OrdersTopic, "order.created")); got != 1 {
+		t.Errorf("dlq total = %v, want 1", got)
+	}
+}
+
+func TestSubscriber_ProcessMessage_RecordsDLQMetricWithUnknownTypeOnUnmarshalFailure(t *testing.T) {
+	msg := kafka.Message{Value: []byte("not json")}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{}
+	registry := prometheus.NewRegistry()
+	m := NewKafkaMetrics(registry)
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic, dlqWriter: dlq, metrics: m}
+
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return nil })
+
+	if got := testutil.ToFloat64(m.dlq.WithLabelValues(OrdersTopic, "unknown")); got != 1 {
+		t.Errorf("dlq total = %v, want 1", got)
+	}
+}
+
+func TestSubscriber_ProcessMessage_NoMetricsConfiguredDoesNotPanic(t *testing.T) {
+	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic}
+
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return nil })
+
+	if len(reader.committed) != 1 {
+		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
 	}
 }
 

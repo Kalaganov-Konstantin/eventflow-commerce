@@ -93,15 +93,22 @@ func main() {
 		defer func() { _ = redisClient.Close() }()
 	}
 
+	cacheMetrics := cache.NewMetrics(prometheus.DefaultRegisterer)
+
 	srv := server.New(server.Options{
-		Config: cfg,
-		Logger: appLogger.Logger,
-		DB:     db,
-		Redis:  redisClient,
+		Config:       cfg,
+		Logger:       appLogger.Logger,
+		DB:           db,
+		Redis:        redisClient,
+		CacheMetrics: cacheMetrics,
 	})
 
+	kafkaMetrics := events.NewKafkaMetrics(prometheus.DefaultRegisterer)
+
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	publisher.SetMetrics(kafkaMetrics)
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.SetMetrics(kafkaMetrics)
 	relay.Start(context.Background())
 
 	stockService := service.NewStockService(repository.NewStockRepository(db.DB))
@@ -111,6 +118,7 @@ func main() {
 		GroupID:  cfg.Kafka.GroupID,
 		DLQTopic: events.DLQTopic(events.OrdersTopic),
 	}, events.OrdersTopic, appLogger.Logger)
+	ordersSubscriber.SetMetrics(kafkaMetrics)
 	ordersConsumer := consumer.NewOrdersConsumer(ordersSubscriber, db.DB, processedStore, stockService, appLogger.Logger)
 
 	consumerCtx, stopConsumer := context.WithCancel(context.Background())
@@ -128,6 +136,7 @@ func main() {
 			GroupID:  cacheConsumerGroupID,
 			DLQTopic: events.DLQTopic(events.InventoryTopic),
 		}, events.InventoryTopic, appLogger.Logger)
+		cacheSubscriber.SetMetrics(kafkaMetrics)
 		cacheConsumer := consumer.NewCacheConsumer(cacheSubscriber, productCache, appLogger.Logger)
 
 		go func() {

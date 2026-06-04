@@ -86,8 +86,12 @@ func main() {
 		DB:     db,
 	})
 
+	kafkaMetrics := events.NewKafkaMetrics(prometheus.DefaultRegisterer)
+
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	publisher.SetMetrics(kafkaMetrics)
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.SetMetrics(kafkaMetrics)
 	relay.Start(context.Background())
 
 	paymentGateway := gateway.NewStubClient(gateway.Config{MaxAmountCents: paymentGatewayMaxAmountCents})
@@ -98,6 +102,7 @@ func main() {
 		GroupID:  cfg.Kafka.GroupID,
 		DLQTopic: events.DLQTopic(events.OrdersTopic),
 	}, events.OrdersTopic, appLogger.Logger)
+	ordersSubscriber.SetMetrics(kafkaMetrics)
 	ordersConsumer := consumer.NewOrdersConsumer(ordersSubscriber, db.DB, processedStore, paymentService, appLogger.Logger)
 
 	consumerCtx, stopConsumer := context.WithCancel(context.Background())

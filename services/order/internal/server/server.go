@@ -35,6 +35,9 @@ type Options struct {
 	DB      *database.DB
 	// Redis is optional: a nil client means the service runs without an order cache.
 	Redis *database.RedisClient
+	// CacheMetrics is optional: a nil value means order cache reads are not recorded as hits or
+	// misses.
+	CacheMetrics *cache.Metrics
 }
 
 // New builds the order HTTP server: health checks, metrics and the shared middleware chain.
@@ -61,7 +64,11 @@ func New(opts Options) *Server {
 		orderService := service.NewOrderService(
 			repository.NewOrderRepository(opts.DB.DB), opts.DB.DB, repository.NewSagaRepository(opts.DB.DB), inventoryClient, paymentClient)
 		if opts.Redis != nil {
-			orderService.SetCache(cache.New(opts.Redis, 0))
+			orderCache := cache.New(opts.Redis, 0)
+			if opts.CacheMetrics != nil {
+				orderCache.SetMetrics(opts.CacheMetrics, "order")
+			}
+			orderService.SetCache(orderCache)
 		}
 		ordersHandler := handler.NewOrdersHandler(orderService, inventoryClient, orderService, opts.Logger)
 		mux.HandleFunc("POST /api/v1/orders", ordersHandler.Create)

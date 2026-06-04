@@ -23,6 +23,9 @@ const scanBatchSize = 100
 type Cache struct {
 	client     *database.RedisClient
 	defaultTTL time.Duration
+
+	metrics *Metrics
+	name    string
 }
 
 // New builds a Cache backed by client. defaultTTL is used by SetJSON whenever it is called with
@@ -34,11 +37,19 @@ func New(client *database.RedisClient, defaultTTL time.Duration) *Cache {
 	return &Cache{client: client, defaultTTL: defaultTTL}
 }
 
+// SetMetrics attaches m so GetJSON reads are recorded as hits or misses under name. Passing nil
+// disables metrics.
+func (c *Cache) SetMetrics(m *Metrics, name string) {
+	c.metrics = m
+	c.name = name
+}
+
 // GetJSON reads key and unmarshals it into dest. A missing key is not an error: it reports a
 // miss (false, nil) and leaves dest untouched.
 func (c *Cache) GetJSON(ctx context.Context, key string, dest any) (bool, error) {
 	raw, err := c.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
+		c.observeMiss()
 		return false, nil
 	}
 	if err != nil {
@@ -48,7 +59,20 @@ func (c *Cache) GetJSON(ctx context.Context, key string, dest any) (bool, error)
 	if err := json.Unmarshal(raw, dest); err != nil {
 		return false, fmt.Errorf("unmarshal cache key %s: %w", key, err)
 	}
+	c.observeHit()
 	return true, nil
+}
+
+func (c *Cache) observeHit() {
+	if c.metrics != nil {
+		c.metrics.ObserveHit(c.name)
+	}
+}
+
+func (c *Cache) observeMiss() {
+	if c.metrics != nil {
+		c.metrics.ObserveMiss(c.name)
+	}
 }
 
 // SetJSON marshals value as JSON and stores it under key with ttl, or the cache's default TTL
