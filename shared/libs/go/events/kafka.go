@@ -54,7 +54,8 @@ type kafkaReader interface {
 }
 
 type Publisher struct {
-	writer kafkaWriter
+	writer  kafkaWriter
+	metrics *KafkaMetrics
 }
 
 type Subscriber struct {
@@ -64,6 +65,17 @@ type Subscriber struct {
 	dlqWriter      kafkaWriter
 	maxRetries     int
 	retryBaseDelay time.Duration
+	metrics        *KafkaMetrics
+}
+
+// SetMetrics attaches m so Publish observations are recorded. Passing nil disables metrics.
+func (p *Publisher) SetMetrics(m *KafkaMetrics) {
+	p.metrics = m
+}
+
+// SetMetrics attaches m so Subscribe observations are recorded. Passing nil disables metrics.
+func (s *Subscriber) SetMetrics(m *KafkaMetrics) {
+	s.metrics = m
 }
 
 func NewPublisher(config KafkaConfig) *Publisher {
@@ -165,6 +177,9 @@ func (p *Publisher) Publish(ctx context.Context, topic string, event Event) erro
 		span.RecordError(err)
 		return err
 	}
+	if p.metrics != nil {
+		p.metrics.ObservePublished(topic, event.Type)
+	}
 	return nil
 }
 
@@ -198,17 +213,21 @@ func (s *Subscriber) processMessage(ctx context.Context, msg kafka.Message, hand
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
 		s.logger.Error("Failed to unmarshal Kafka message", zap.Error(err), zap.ByteString("message", msg.Value))
 		span.RecordError(err)
-		s.handleFailure(ctx, msg, "unmarshal_error")
+		s.handleFailure(ctx, msg, "unmarshal_error", "unknown")
 		return
 	}
 
+	start := time.Now()
 	if err := s.handleWithRetry(msgCtx, event, handler); err != nil {
 		s.logger.Error("Failed to handle event after retries", zap.Error(err), zap.String("event_id", event.ID))
 		span.RecordError(err)
-		s.handleFailure(ctx, msg, "handler_error")
+		s.handleFailure(ctx, msg, "handler_error", event.Type)
 		return
 	}
 
+	if s.metrics != nil {
+		s.metrics.ObserveConsumed(s.topic, event.Type, time.Since(start))
+	}
 	s.commit(ctx, msg)
 }
 
@@ -243,8 +262,12 @@ func (s *Subscriber) wait(ctx context.Context, d time.Duration) error {
 }
 
 // handleFailure sends msg to the DLQ and only commits its offset once that write succeeds.
-func (s *Subscriber) handleFailure(ctx context.Context, msg kafka.Message, errorType string) {
+// eventType labels the DLQ metric; it is "unknown" when msg could not even be unmarshaled.
+func (s *Subscriber) handleFailure(ctx context.Context, msg kafka.Message, errorType, eventType string) {
 	if s.sendToDLQ(ctx, msg, errorType) {
+		if s.metrics != nil {
+			s.metrics.ObserveDLQ(s.topic, eventType)
+		}
 		s.commit(ctx, msg)
 	}
 }

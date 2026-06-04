@@ -58,13 +58,14 @@ type PaymentRefunder interface {
 // OrderService applies order lifecycle transitions and records the resulting domain event in the
 // outbox, within a transaction supplied by the caller so it can be combined with other writes.
 type OrderService struct {
-	repo      Repository
-	db        *sql.DB
-	saga      SagaRepository
-	inventory InventoryReleaser
-	payments  PaymentRefunder
-	outbox    *outbox.Store
-	cache     OrderCache
+	repo        Repository
+	db          *sql.DB
+	saga        SagaRepository
+	inventory   InventoryReleaser
+	payments    PaymentRefunder
+	outbox      *outbox.Store
+	cache       OrderCache
+	sagaMetrics *saga.Metrics
 }
 
 // NewOrderService builds an OrderService backed by repo, sagaRepo, inventory and payments. db is
@@ -78,6 +79,12 @@ func NewOrderService(repo Repository, db *sql.DB, sagaRepo SagaRepository, inven
 // SetCache attaches cache for GetByID reads. Passing nil disables caching.
 func (s *OrderService) SetCache(cache OrderCache) {
 	s.cache = cache
+}
+
+// SetSagaMetrics attaches m so a saga reaching completed or compensated is recorded. Passing nil
+// disables metrics.
+func (s *OrderService) SetSagaMetrics(m *saga.Metrics) {
+	s.sagaMetrics = m
 }
 
 // Save persists order, delegating to the repository directly.
@@ -174,7 +181,11 @@ func (s *OrderService) ConfirmPayment(ctx context.Context, tx *sql.Tx, orderID u
 	if err := s.applyTransition(ctx, tx, order, (*domain.Order).Confirm, events.EventTypeOrderConfirmed); err != nil {
 		return err
 	}
-	return s.saga.Transition(ctx, tx, orderID, saga.StateCompleted)
+	if err := s.saga.Transition(ctx, tx, orderID, saga.StateCompleted); err != nil {
+		return err
+	}
+	s.recordSagaCompleted(order.CreatedAt)
+	return nil
 }
 
 // FailPayment compensates an order whose payment failed: it transitions the saga to compensating,
@@ -209,7 +220,11 @@ func (s *OrderService) FailPayment(ctx context.Context, tx *sql.Tx, orderID uuid
 	if err := s.applyTransition(ctx, tx, order, (*domain.Order).Fail, events.EventTypeOrderCancelled); err != nil {
 		return err
 	}
-	return s.saga.Transition(ctx, tx, orderID, saga.StateCompensated)
+	if err := s.saga.Transition(ctx, tx, orderID, saga.StateCompensated); err != nil {
+		return err
+	}
+	s.recordSagaCompensated(order.CreatedAt)
+	return nil
 }
 
 // FailAfterPayment compensates an order whose payment already succeeded but the order cannot be
@@ -248,7 +263,11 @@ func (s *OrderService) FailAfterPayment(ctx context.Context, tx *sql.Tx, orderID
 	if err := s.applyTransition(ctx, tx, order, (*domain.Order).Cancel, events.EventTypeOrderCancelled); err != nil {
 		return err
 	}
-	return s.saga.Transition(ctx, tx, orderID, saga.StateCompensated)
+	if err := s.saga.Transition(ctx, tx, orderID, saga.StateCompensated); err != nil {
+		return err
+	}
+	s.recordSagaCompensated(order.CreatedAt)
+	return nil
 }
 
 // markCompensating durably records that compensation for orderID has begun, in its own
@@ -265,6 +284,21 @@ func (s *OrderService) markCompensating(ctx context.Context, orderID uuid.UUID) 
 		return err
 	}
 	return tx.Commit()
+}
+
+// recordSagaCompleted records a saga that reached the completed state, if metrics are configured.
+func (s *OrderService) recordSagaCompleted(createdAt time.Time) {
+	if s.sagaMetrics != nil {
+		s.sagaMetrics.RecordCompleted(createdAt)
+	}
+}
+
+// recordSagaCompensated records a saga that reached the compensated state, if metrics are
+// configured.
+func (s *OrderService) recordSagaCompensated(createdAt time.Time) {
+	if s.sagaMetrics != nil {
+		s.sagaMetrics.RecordCompensated(createdAt)
+	}
 }
 
 // isTerminal reports whether status is an outcome a payment result would otherwise drive the

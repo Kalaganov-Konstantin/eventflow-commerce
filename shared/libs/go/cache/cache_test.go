@@ -7,6 +7,8 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -102,6 +104,41 @@ func TestCache_Delete_NoKeys(t *testing.T) {
 
 	if err := c.Delete(context.Background()); err != nil {
 		t.Fatalf("Delete() error = %v, want nil", err)
+	}
+}
+
+func TestCache_GetJSON_RecordsHitAndMissMetrics(t *testing.T) {
+	c := newTestCache(t)
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+	c.SetMetrics(m, "order")
+	ctx := context.Background()
+
+	var dest sampleValue
+	if _, err := c.GetJSON(ctx, "missing", &dest); err != nil {
+		t.Fatalf("GetJSON() error = %v", err)
+	}
+	if got := testutil.ToFloat64(m.misses.WithLabelValues("order")); got != 1 {
+		t.Errorf("misses total = %v, want 1", got)
+	}
+
+	if err := c.SetJSON(ctx, "key", sampleValue{Name: "widget"}, time.Minute); err != nil {
+		t.Fatalf("SetJSON() error = %v", err)
+	}
+	if _, err := c.GetJSON(ctx, "key", &dest); err != nil {
+		t.Fatalf("GetJSON() error = %v", err)
+	}
+	if got := testutil.ToFloat64(m.hits.WithLabelValues("order")); got != 1 {
+		t.Errorf("hits total = %v, want 1", got)
+	}
+}
+
+func TestCache_GetJSON_NoMetricsConfiguredDoesNotPanic(t *testing.T) {
+	c := newTestCache(t)
+
+	var dest sampleValue
+	if _, err := c.GetJSON(context.Background(), "missing", &dest); err != nil {
+		t.Fatalf("GetJSON() error = %v", err)
 	}
 }
 

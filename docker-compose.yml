@@ -328,6 +328,36 @@ services:
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
       KAFKA_CLUSTERS_0_JMXPORT: ${KAFKA_JMX_PORT}
 
+  # Exporters
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    ports:
+      - "${POSTGRES_EXPORTER_PORT}:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: ${REDIS_URL}
+    ports:
+      - "${REDIS_EXPORTER_PORT}:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    command: ["--kafka.server=${KAFKA_BROKERS}"]
+    ports:
+      - "${KAFKA_EXPORTER_PORT}:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   # Monitoring
   prometheus:
     image: prom/prometheus:latest
@@ -347,6 +377,26 @@ services:
       - ./infrastructure/grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./infrastructure/grafana/datasources:/etc/grafana/provisioning/datasources
       - grafana_data:/var/lib/grafana
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    ports:
+      - "${ALERTMANAGER_PORT}:9093"
+    volumes:
+      - ./infrastructure/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+
+  # Stub receiver for alertmanager: echoes every webhook it gets to its own logs, standing in
+  # for a real paging channel.
+  webhook-logger:
+    image: mendhak/http-https-echo:latest
+    environment:
+      - HTTP_PORT=8080
+    ports:
+      - "${WEBHOOK_LOGGER_PORT}:8080"
 
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -372,3 +422,4 @@ volumes:
   zookeeper_logs:
   prometheus_data:
   grafana_data:
+  alertmanager_data:

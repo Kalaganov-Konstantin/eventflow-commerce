@@ -14,14 +14,17 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/consumer"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/repository"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/saga"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/server"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	sharedtracing "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/tracing"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -83,6 +86,7 @@ func main() {
 		appLogger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 	defer func() { _ = db.Close() }()
+	prometheus.MustRegister(metrics.NewDatabaseMetrics(db.DB, cfg.Service.Name))
 
 	redisClient, err := database.NewRedisConnection(database.RedisConfig{
 		URL:      cfg.Redis.URL,
@@ -95,27 +99,36 @@ func main() {
 		defer func() { _ = redisClient.Close() }()
 	}
 
+	cacheMetrics := cache.NewMetrics(prometheus.DefaultRegisterer)
+
 	srv := server.New(server.Options{
-		Config: cfg,
-		Logger: appLogger.Logger,
-		DB:     db,
-		Redis:  redisClient,
+		Config:       cfg,
+		Logger:       appLogger.Logger,
+		DB:           db,
+		Redis:        redisClient,
+		CacheMetrics: cacheMetrics,
 	})
 
+	kafkaMetrics := events.NewKafkaMetrics(prometheus.DefaultRegisterer)
+
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	publisher.SetMetrics(kafkaMetrics)
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.SetMetrics(kafkaMetrics)
 	relay.Start(context.Background())
 
 	inventoryClient := client.NewInventoryClient(cfg.InventoryServiceURL, cfg.InventoryClient.Timeout)
 	paymentClient := client.NewPaymentClient(cfg.PaymentServiceURL, cfg.PaymentClient.Timeout)
 	orderService := service.NewOrderService(
 		repository.NewOrderRepository(db.DB), db.DB, repository.NewSagaRepository(db.DB), inventoryClient, paymentClient)
+	orderService.SetSagaMetrics(saga.NewMetrics(prometheus.DefaultRegisterer))
 	processedStore := events.NewProcessedStore(db.DB)
 	paymentsSubscriber := events.NewSubscriber(events.KafkaConfig{
 		Brokers:  cfg.Kafka.Brokers,
 		GroupID:  cfg.Kafka.GroupID,
 		DLQTopic: events.DLQTopic(events.PaymentsTopic),
 	}, events.PaymentsTopic, appLogger.Logger)
+	paymentsSubscriber.SetMetrics(kafkaMetrics)
 	paymentsConsumer := consumer.NewPaymentsConsumer(paymentsSubscriber, db.DB, processedStore, orderService, appLogger)
 
 	consumerCtx, stopConsumer := context.WithCancel(context.Background())
@@ -133,6 +146,7 @@ func main() {
 			GroupID:  cacheConsumerGroupID,
 			DLQTopic: events.DLQTopic(events.OrdersTopic),
 		}, events.OrdersTopic, appLogger.Logger)
+		cacheSubscriber.SetMetrics(kafkaMetrics)
 		cacheConsumer := consumer.NewCacheConsumer(cacheSubscriber, orderCache, appLogger.Logger)
 
 		go func() {

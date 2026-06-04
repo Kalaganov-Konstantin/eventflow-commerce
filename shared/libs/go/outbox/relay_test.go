@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
@@ -66,6 +67,78 @@ func TestRelay_RelayBatch_PublishesPendingMessageAndMarksItPublished(t *testing.
 	}
 	if got := pub.published[0].Data["total_cents"]; got != float64(1999) {
 		t.Errorf("payload total_cents = %v, want 1999", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_ReportsPendingBacklogWhenMetricsConfigured(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM outbox_messages WHERE published_at IS NULL")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+	registry := prometheus.NewRegistry()
+	m := events.NewKafkaMetrics(registry)
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10, metrics: m}
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v", err)
+	}
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	var got float64
+	found := false
+	for _, mf := range families {
+		if mf.GetName() == "outbox_pending_messages" {
+			got = mf.GetMetric()[0].GetGauge().GetValue()
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("outbox_pending_messages metric not found")
+	}
+	if got != 3 {
+		t.Errorf("outbox pending = %v, want 3", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_NoMetricsConfiguredSkipsPendingCountQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns))
+	mock.ExpectCommit()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

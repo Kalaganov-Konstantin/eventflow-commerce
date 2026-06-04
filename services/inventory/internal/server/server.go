@@ -34,6 +34,9 @@ type Options struct {
 	DB      *database.DB
 	// Redis is optional: a nil client means the service runs without a product cache.
 	Redis *database.RedisClient
+	// CacheMetrics is optional: a nil value means product cache reads are not recorded as hits
+	// or misses.
+	CacheMetrics *cache.Metrics
 }
 
 // New builds the inventory HTTP server: health checks, metrics and the shared middleware chain.
@@ -59,7 +62,11 @@ func New(opts Options) *Server {
 
 		var productCache service.ProductCache
 		if opts.Redis != nil {
-			productCache = cache.New(opts.Redis, 0)
+			c := cache.New(opts.Redis, 0)
+			if opts.CacheMetrics != nil {
+				c.SetMetrics(opts.CacheMetrics, "product")
+			}
+			productCache = c
 		}
 		productService := service.NewProductService(repository.NewProductRepository(opts.DB.DB), productCache)
 

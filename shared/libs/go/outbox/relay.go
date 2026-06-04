@@ -25,9 +25,16 @@ type Relay struct {
 	logger    *zap.Logger
 	interval  time.Duration
 	batchSize int
+	metrics   *events.KafkaMetrics
 
 	stop chan struct{}
 	done chan struct{}
+}
+
+// SetMetrics attaches m so the relay reports its outbox backlog after each poll. Passing nil
+// disables metrics.
+func (r *Relay) SetMetrics(m *events.KafkaMetrics) {
+	r.metrics = m
 }
 
 // NewRelay creates a Relay that polls db every interval for up to batchSize pending messages.
@@ -103,7 +110,25 @@ func (r *Relay) RelayBatch(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit outbox relay transaction: %w", err)
 	}
+
+	r.reportPending(ctx)
 	return nil
+}
+
+// reportPending counts remaining unpublished outbox rows and reports them through metrics. It is
+// a no-op when no metrics are configured, so it never issues the count query for a relay nobody
+// is scraping.
+func (r *Relay) reportPending(ctx context.Context) {
+	if r.metrics == nil {
+		return
+	}
+
+	var count float64
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbox_messages WHERE published_at IS NULL`).Scan(&count); err != nil {
+		r.logger.Error("failed to count pending outbox messages", zap.Error(err))
+		return
+	}
+	r.metrics.SetOutboxPending(count)
 }
 
 func (r *Relay) selectPending(ctx context.Context, tx *sql.Tx) ([]outboxRow, error) {

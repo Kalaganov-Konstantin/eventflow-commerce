@@ -19,8 +19,10 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	sharedlogger "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/logger"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/outbox"
 	sharedtracing "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/tracing"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -76,6 +78,7 @@ func main() {
 		appLogger.Fatal("Failed to connect to database", zap.Error(err))
 	}
 	defer func() { _ = db.Close() }()
+	prometheus.MustRegister(metrics.NewDatabaseMetrics(db.DB, cfg.Service.Name))
 
 	srv := server.New(server.Options{
 		Config: cfg,
@@ -83,8 +86,12 @@ func main() {
 		DB:     db,
 	})
 
+	kafkaMetrics := events.NewKafkaMetrics(prometheus.DefaultRegisterer)
+
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: cfg.Kafka.Brokers})
+	publisher.SetMetrics(kafkaMetrics)
 	relay := outbox.NewRelay(db.DB, publisher, appLogger.Logger, cfg.Outbox.RelayInterval, cfg.Outbox.RelayBatchSize)
+	relay.SetMetrics(kafkaMetrics)
 	relay.Start(context.Background())
 
 	paymentGateway := gateway.NewStubClient(gateway.Config{MaxAmountCents: paymentGatewayMaxAmountCents})
@@ -95,6 +102,7 @@ func main() {
 		GroupID:  cfg.Kafka.GroupID,
 		DLQTopic: events.DLQTopic(events.OrdersTopic),
 	}, events.OrdersTopic, appLogger.Logger)
+	ordersSubscriber.SetMetrics(kafkaMetrics)
 	ordersConsumer := consumer.NewOrdersConsumer(ordersSubscriber, db.DB, processedStore, paymentService, appLogger.Logger)
 
 	consumerCtx, stopConsumer := context.WithCancel(context.Background())
