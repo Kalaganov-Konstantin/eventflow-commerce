@@ -4,6 +4,8 @@ import os
 import sys
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 SERVICE_NAME = "notification"
 SERVICE_VERSION = "1.0.0"
 
@@ -21,6 +23,15 @@ class JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "message": record.getMessage(),
         }
+
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            payload["trace_id"] = format(span_context.trace_id, "032x")
+            payload["span_id"] = format(span_context.span_id, "016x")
+
+        correlation_id = getattr(record, "correlation_id", None)
+        if correlation_id:
+            payload["correlation_id"] = correlation_id
 
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)

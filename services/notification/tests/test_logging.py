@@ -2,6 +2,10 @@ import io
 import json
 import logging
 
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
 from notification.logging import _UVICORN_LOGGER_NAMES, JSONFormatter, configure_logging
 
 
@@ -65,6 +69,55 @@ def test_json_formatter_includes_exception_details():
 
     payload = json.loads(stream.getvalue().strip())
     assert "ValueError: boom" in payload["exception"]
+
+
+def test_json_formatter_includes_trace_and_span_ids_from_active_span():
+    logger = logging.getLogger("test.logging.formatter.trace")
+    tracer = TracerProvider().get_tracer(__name__)
+    span = tracer.start_span("test-span")
+    token = otel_context.attach(trace.set_span_in_context(span))
+    try:
+        payload = _log_line(logger, "traced")
+    finally:
+        otel_context.detach(token)
+        span.end()
+
+    span_context = span.get_span_context()
+    assert payload["trace_id"] == format(span_context.trace_id, "032x")
+    assert payload["span_id"] == format(span_context.span_id, "016x")
+
+
+def test_json_formatter_omits_trace_and_span_ids_without_active_span():
+    logger = logging.getLogger("test.logging.formatter.no_trace")
+
+    payload = _log_line(logger, "untraced")
+
+    assert "trace_id" not in payload
+    assert "span_id" not in payload
+
+
+def test_json_formatter_includes_correlation_id_when_provided():
+    logger = logging.getLogger("test.logging.formatter.correlation")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info("with correlation", extra={"correlation_id": "corr-1"})
+    finally:
+        logger.removeHandler(handler)
+
+    payload = json.loads(stream.getvalue().strip())
+    assert payload["correlation_id"] == "corr-1"
+
+
+def test_json_formatter_omits_correlation_id_when_absent():
+    logger = logging.getLogger("test.logging.formatter.no_correlation")
+
+    payload = _log_line(logger, "no correlation")
+
+    assert "correlation_id" not in payload
 
 
 def test_configure_logging_noop_in_development(monkeypatch):

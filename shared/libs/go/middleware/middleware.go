@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -13,6 +14,10 @@ import (
 type contextKey string
 
 const RequestIDKey contextKey = "request_id"
+
+// CorrelationIDHeader carries the correlation id that ties a request to the chain of events
+// it triggers; api-gateway sets it, downstream services just read it back.
+const CorrelationIDHeader = "X-Correlation-ID"
 
 type Middleware func(http.Handler) http.Handler
 
@@ -65,7 +70,7 @@ func Logging(logger *zap.Logger) Middleware {
 			duration := time.Since(start)
 			requestID := r.Context().Value(RequestIDKey)
 
-			logger.Info("HTTP Request",
+			fields := []zap.Field{
 				zap.String("method", r.Method),
 				zap.String("path", r.URL.Path),
 				zap.String("remote_addr", r.RemoteAddr),
@@ -73,7 +78,20 @@ func Logging(logger *zap.Logger) Middleware {
 				zap.Int("status_code", wrapped.statusCode),
 				zap.Duration("duration", duration),
 				zap.Any("request_id", requestID),
-			)
+			}
+
+			if spanContext := trace.SpanContextFromContext(r.Context()); spanContext.IsValid() {
+				fields = append(fields,
+					zap.String("trace_id", spanContext.TraceID().String()),
+					zap.String("span_id", spanContext.SpanID().String()),
+				)
+			}
+
+			if correlationID := r.Header.Get(CorrelationIDHeader); correlationID != "" {
+				fields = append(fields, zap.String("correlation_id", correlationID))
+			}
+
+			logger.Info("HTTP Request", fields...)
 		})
 	}
 }
