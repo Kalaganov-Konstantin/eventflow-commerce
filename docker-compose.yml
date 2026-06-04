@@ -414,6 +414,49 @@ services:
       - "${JAEGER_OTLP_GRPC_PORT}:4317"
       - "${JAEGER_OTLP_HTTP_PORT}:4318"
 
+  # Logging: elasticsearch, kibana and fluentd (infrastructure/fluentd) all live behind the
+  # "logging" profile, so `docker-compose up` and `make demo` do not start them; `make logging-up`
+  # brings the profile up on demand.
+  elasticsearch:
+    profiles:
+      - logging
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    mem_limit: 1g
+    ports:
+      - "${ELASTICSEARCH_PORT}:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  kibana:
+    profiles:
+      - logging
+    image: docker.elastic.co/kibana/kibana:8.11.4
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    mem_limit: 1g
+    ports:
+      - "${KIBANA_PORT}:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
 volumes:
   postgres_data:
   redis_data:
@@ -423,3 +466,4 @@ volumes:
   prometheus_data:
   grafana_data:
   alertmanager_data:
+  elasticsearch_data:
