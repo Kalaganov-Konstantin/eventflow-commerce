@@ -8,9 +8,12 @@ from prometheus_client import make_asgi_app
 from .api.notifications import router as notifications_router
 from .config.config import load_config
 from .consumer import create_consumer
+from .logging import configure_logging
 from .senders.email import EmailSender
 from .storage.notifications import create_pool
 from .tracing import setup_tracing
+
+configure_logging()
 
 
 @asynccontextmanager
@@ -82,4 +85,5 @@ async def root():
 if __name__ == "__main__":
     config = load_config()
     print(f"Starting Notification service on {config.server.host}:{config.server.port}")
-    uvicorn.run(app, host=config.server.host, port=config.server.port)
+    # log_config=None keeps configure_logging()'s formatter instead of uvicorn's default one.
+    uvicorn.run(app, host=config.server.host, port=config.server.port, log_config=None)

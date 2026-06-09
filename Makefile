@@ -193,6 +193,18 @@ docker-clean: ## 🧹 Clean Docker images and containers
 	@docker system prune -f
 	@docker volume prune -f
 
+.PHONY: logging-up
+logging-up: ## 📚 Start the logging stack (elasticsearch, kibana, fluentd)
+	@echo "--> Starting the logging stack and waiting for it to be healthy..."
+	@docker-compose --profile logging up -d --wait elasticsearch kibana fluentd
+	@echo "✅ Logging stack is running!"
+	@echo "📚 Kibana: http://localhost:${KIBANA_PORT}"
+
+.PHONY: logging-down
+logging-down: ## 🛑 Stop the logging stack
+	@echo "--> Stopping the logging stack..."
+	@docker-compose --profile logging down elasticsearch kibana fluentd
+
 
 .PHONY: demo
 demo: ensure-env docker-build docker-up migrate ## 🎯 Full demo: build and start all services

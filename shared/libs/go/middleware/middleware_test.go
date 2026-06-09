@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -119,6 +121,92 @@ func TestLogging(t *testing.T) {
 	}
 	if fields["status_code"] != int64(http.StatusTeapot) {
 		t.Errorf("logged status_code = %v, want %v", fields["status_code"], http.StatusTeapot)
+	}
+}
+
+func TestLogging_IncludesTraceAndSpanIDsFromContext(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	if err != nil {
+		t.Fatalf("TraceIDFromHex() error = %v", err)
+	}
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	if err != nil {
+		t.Fatalf("SpanIDFromHex() error = %v", err)
+	}
+	spanContext := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	})
+
+	handler := Logging(logger)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(trace.ContextWithSpanContext(context.Background(), spanContext))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	fields := logs.All()[0].ContextMap()
+	if got := fields["trace_id"]; got != traceID.String() {
+		t.Errorf("trace_id = %v, want %v", got, traceID.String())
+	}
+	if got := fields["span_id"]; got != spanID.String() {
+		t.Errorf("span_id = %v, want %v", got, spanID.String())
+	}
+}
+
+func TestLogging_OmitsTraceAndSpanIDsWithoutActiveSpan(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+
+	handler := Logging(logger)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	fields := logs.All()[0].ContextMap()
+	if _, ok := fields["trace_id"]; ok {
+		t.Error("trace_id should not be set without an active span")
+	}
+	if _, ok := fields["span_id"]; ok {
+		t.Error("span_id should not be set without an active span")
+	}
+}
+
+func TestLogging_IncludesCorrelationIDFromHeader(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+
+	handler := Logging(logger)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(CorrelationIDHeader, "corr-42")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	fields := logs.All()[0].ContextMap()
+	if got := fields["correlation_id"]; got != "corr-42" {
+		t.Errorf("correlation_id = %v, want %v", got, "corr-42")
+	}
+}
+
+func TestLogging_OmitsCorrelationIDWithoutHeader(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logger := zap.New(core)
+
+	handler := Logging(logger)(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	fields := logs.All()[0].ContextMap()
+	if _, ok := fields["correlation_id"]; ok {
+		t.Error("correlation_id should not be set without the header")
 	}
 }
 
