@@ -298,6 +298,26 @@ func (p *Publisher) Close() error {
 	return p.writer.Close()
 }
 
+// Healthy dials the first reachable broker in brokers to confirm Kafka is reachable. It opens a
+// short-lived connection distinct from the publisher's writer, meant for readiness probes rather
+// than the publish path.
+func Healthy(ctx context.Context, brokers []string) error {
+	if len(brokers) == 0 {
+		return fmt.Errorf("no kafka brokers configured")
+	}
+
+	var lastErr error
+	for _, broker := range brokers {
+		conn, err := kafka.DialContext(ctx, "tcp", broker)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return conn.Close()
+	}
+	return fmt.Errorf("no reachable kafka broker: %w", lastErr)
+}
+
 func (s *Subscriber) Close() error {
 	if s.dlqWriter != nil {
 		_ = s.dlqWriter.Close()
