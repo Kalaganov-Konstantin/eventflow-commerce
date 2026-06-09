@@ -457,6 +457,20 @@ services:
       retries: 5
       start_period: 60s
 
+  fluentd:
+    profiles:
+      - logging
+    build:
+      context: ./infrastructure/fluentd
+    volumes:
+      # Read-only: fluentd tails the host's container logs, it never writes to them.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - fluentd_data:/fluentd/log
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
@@ -467,3 +481,4 @@ volumes:
   grafana_data:
   alertmanager_data:
   elasticsearch_data:
+  fluentd_data:
