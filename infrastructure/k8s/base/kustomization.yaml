@@ -12,3 +12,4 @@ resources:
   - payment.yaml
   - inventory.yaml
   - notification.yaml
+  - migrations.yaml
