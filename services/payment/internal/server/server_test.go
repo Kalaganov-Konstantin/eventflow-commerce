@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -59,6 +60,70 @@ func TestServer_HealthEndpoints(t *testing.T) {
 		if status.Service != "payment" {
 			t.Errorf("%s: expected service 'payment', got %q", path, status.Service)
 		}
+	}
+}
+
+func TestServer_HealthEndpoints_KafkaReachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "payment", Version: "1.0.0"},
+		Kafka:   sharedConfig.KafkaConfig{Brokers: []string{ln.Addr().String()}},
+	}
+	srv := New(Options{
+		Config:  cfg,
+		Logger:  zaptest.NewLogger(t),
+		Metrics: prometheus.NewRegistry(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (body=%s)", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestServer_HealthEndpoints_KafkaUnreachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "payment", Version: "1.0.0"},
+		Kafka:   sharedConfig.KafkaConfig{Brokers: []string{addr}},
+	}
+	srv := New(Options{
+		Config:  cfg,
+		Logger:  zaptest.NewLogger(t),
+		Metrics: prometheus.NewRegistry(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d (body=%s)", http.StatusServiceUnavailable, w.Code, w.Body.String())
 	}
 }
 

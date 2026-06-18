@@ -1,0 +1,107 @@
+# Mirrors scripts/init-databases.sh, run once by the postgres image's own entrypoint against
+# /docker-entrypoint-initdb.d on first boot. Keep this in sync with that script.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: eventflow
+data:
+  init-databases.sh: |
+    #!/bin/bash
+    set -e
+
+    # Create separate databases for each service
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+        -- Create users for each service
+        CREATE USER orders_user WITH PASSWORD 'orders_pass';
+        CREATE USER payments_user WITH PASSWORD 'payments_pass';
+        CREATE USER inventory_user WITH PASSWORD 'inventory_pass';
+        CREATE USER notifications_user WITH PASSWORD 'notifications_pass';
+
+        -- Create databases for each service and set the owner
+        CREATE DATABASE orders OWNER orders_user;
+        CREATE DATABASE payments OWNER payments_user;
+        CREATE DATABASE inventory OWNER inventory_user;
+        CREATE DATABASE notifications OWNER notifications_user;
+    EOSQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: eventflow
+  labels:
+    app: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: eventflow
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - name: postgres
+              containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: eventflow-secrets
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-init-scripts
+              mountPath: /docker-entrypoint-initdb.d/init-databases.sh
+              subPath: init-databases.sh
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+      volumes:
+        - name: postgres-init-scripts
+          configMap:
+            name: postgres-init-scripts
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

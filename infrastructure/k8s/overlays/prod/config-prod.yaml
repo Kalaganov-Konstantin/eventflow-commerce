@@ -1,0 +1,16 @@
+# The base already defaults to info/production; pinned here explicitly so prod does not
+# silently follow a future change to the base's defaults.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventflow-config
+data:
+  ENVIRONMENT: production
+  API_GATEWAY_LOGGER_LEVEL: info
+  API_GATEWAY_LOGGER_ENVIRONMENT: production
+  ORDER_LOGGER_LEVEL: info
+  ORDER_LOGGER_ENVIRONMENT: production
+  PAYMENT_LOGGER_LEVEL: info
+  PAYMENT_LOGGER_ENVIRONMENT: production
+  INVENTORY_LOGGER_LEVEL: info
+  INVENTORY_LOGGER_ENVIRONMENT: production

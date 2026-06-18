@@ -13,6 +13,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/repository"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
@@ -45,11 +46,13 @@ func New(opts Options) *Server {
 		registerer = prometheus.DefaultRegisterer
 	}
 
-	var checks map[string]httpserver.Check
+	checks := make(map[string]httpserver.Check)
 	if opts.DB != nil {
-		checks = map[string]httpserver.Check{
-			"database": opts.DB.PingContext,
-		}
+		checks["database"] = opts.DB.PingContext
+	}
+	if len(opts.Config.Kafka.Brokers) > 0 {
+		brokers := opts.Config.Kafka.Brokers
+		checks["kafka"] = func(ctx context.Context) error { return events.Healthy(ctx, brokers) }
 	}
 
 	mux := http.NewServeMux()

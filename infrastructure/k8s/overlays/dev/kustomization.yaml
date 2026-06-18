@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # One replica per application service; a local cluster has no spare capacity for the base's
+  # rolling-update surge or its HPA minReplicas anyway.
+  - path: replicas-one.yaml
+    target:
+      kind: Deployment
+
+  # Smaller requests and limits than the base, sized for a local cluster instead of production
+  # traffic.
+  - path: resources-dev.yaml
+    target:
+      kind: Deployment
+
+  - path: config-dev.yaml
+    target:
+      kind: ConfigMap
+      name: eventflow-config

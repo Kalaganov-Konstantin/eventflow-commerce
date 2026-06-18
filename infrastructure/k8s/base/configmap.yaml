@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventflow-config
+  namespace: eventflow
+data:
+  # Ports the services bind to; matches the *_SERVER_PORT names read by each service's config.
+  API_GATEWAY_SERVER_PORT: "8080"
+  ORDER_SERVER_PORT: "8081"
+  PAYMENT_SERVER_PORT: "8082"
+  INVENTORY_SERVER_PORT: "8083"
+  NOTIFICATION_SERVER_PORT: "8084"
+
+  # Cache and broker, addressed by the in-cluster Service names defined in redis.yaml and
+  # kafka.yaml.
+  REDIS_URL: "redis://redis:6379"
+  KAFKA_BROKERS: "kafka:9092"
+  NOTIFICATION_KAFKA_BROKERS: "kafka:9092"
+
+  # Per-service Kafka consumer groups, matching the defaults compiled into each service.
+  ORDER_KAFKA_GROUP_ID: "order-service"
+  PAYMENT_KAFKA_GROUP_ID: "payment-service"
+  INVENTORY_KAFKA_GROUP_ID: "inventory-service"
+
+  # Traces go out as OTLP over HTTP to the jaeger collector's endpoint; not part of this base,
+  # left resolvable so the manifests apply cleanly against a cluster that does not run jaeger.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+
+  # Service-to-service URLs, addressed by the Service names defined alongside each Deployment.
+  ORDER_SERVICE_URL: "http://order-service:8081"
+  PAYMENT_SERVICE_URL: "http://payment-service:8082"
+  INVENTORY_SERVICE_URL: "http://inventory-service:8083"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8084"
+
+  API_GATEWAY_SERVICE_NAME: "api-gateway"
+  API_GATEWAY_SERVICE_VERSION: "1.0.0"
+
+  # Logging; the dev overlay switches level to debug and environment to development.
+  ENVIRONMENT: "production"
+  API_GATEWAY_LOGGER_LEVEL: "info"
+  API_GATEWAY_LOGGER_ENVIRONMENT: "production"
+  API_GATEWAY_LOGGER_OUTPUT_PATHS: "stdout"
+  ORDER_LOGGER_LEVEL: "info"
+  ORDER_LOGGER_ENVIRONMENT: "production"
+  PAYMENT_LOGGER_LEVEL: "info"
+  PAYMENT_LOGGER_ENVIRONMENT: "production"
+  INVENTORY_LOGGER_LEVEL: "info"
+  INVENTORY_LOGGER_ENVIRONMENT: "production"
+
+  NOTIFICATION_SMTP_PORT: "587"

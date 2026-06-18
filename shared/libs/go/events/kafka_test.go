@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -269,6 +270,49 @@ func TestSubscriber_ProcessMessage_NoMetricsConfiguredDoesNotPanic(t *testing.T)
 
 	if len(reader.committed) != 1 {
 		t.Fatalf("committed = %d messages, want 1", len(reader.committed))
+	}
+}
+
+func TestHealthy_NoBrokersConfigured(t *testing.T) {
+	if err := Healthy(context.Background(), nil); err == nil {
+		t.Fatal("Healthy() error = nil, want error")
+	}
+}
+
+func TestHealthy_ReachableBroker(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	if err := Healthy(context.Background(), []string{ln.Addr().String()}); err != nil {
+		t.Fatalf("Healthy() error = %v", err)
+	}
+}
+
+func TestHealthy_UnreachableBroker(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := Healthy(ctx, []string{addr}); err == nil {
+		t.Fatal("Healthy() error = nil, want error")
 	}
 }
 

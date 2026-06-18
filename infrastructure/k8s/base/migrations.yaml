@@ -1,0 +1,669 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-migrations
+  namespace: eventflow
+data:
+  000001_create_orders_tables.down.sql: |
+    -- Drop triggers
+    DROP TRIGGER IF EXISTS update_orders_updated_at ON orders;
+
+    -- Drop trigger function
+    DROP FUNCTION IF EXISTS update_updated_at_column();
+
+    -- Drop indexes
+    DROP INDEX IF EXISTS idx_order_items_product_id;
+    DROP INDEX IF EXISTS idx_order_items_order_id;
+    DROP INDEX IF EXISTS idx_orders_updated_at;
+    DROP INDEX IF EXISTS idx_orders_created_at;
+    DROP INDEX IF EXISTS idx_orders_status;
+    DROP INDEX IF EXISTS idx_orders_customer_id;
+
+    -- Drop tables (order matters due to foreign keys)
+    DROP TABLE IF EXISTS order_items;
+    DROP TABLE IF EXISTS orders;
+  000001_create_orders_tables.up.sql: |
+    -- Enable UUID extension
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    -- Create orders table
+    CREATE TABLE orders (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        customer_id UUID NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled')),
+        total_amount_cents BIGINT NOT NULL CHECK (total_amount_cents >= 0),
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        shipping_address JSONB,
+        billing_address JSONB,
+        notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        version INTEGER DEFAULT 1
+    );
+
+    -- Create order_items table
+    CREATE TABLE order_items (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        product_id UUID NOT NULL,
+        product_name VARCHAR(255) NOT NULL,
+        product_sku VARCHAR(100),
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        unit_price_cents BIGINT NOT NULL CHECK (unit_price_cents >= 0),
+        total_price_cents BIGINT NOT NULL CHECK (total_price_cents >= 0),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    -- Create indexes for better performance
+    CREATE INDEX idx_orders_customer_id ON orders(customer_id);
+    CREATE INDEX idx_orders_status ON orders(status);
+    CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
+    CREATE INDEX idx_orders_updated_at ON orders(updated_at DESC);
+
+    CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+    CREATE INDEX idx_order_items_product_id ON order_items(product_id);
+
+    -- Create trigger function for updated_at
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    -- Create trigger for orders table
+    CREATE TRIGGER update_orders_updated_at
+        BEFORE UPDATE ON orders
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+  000002_add_pending_payment_status.down.sql: |
+    UPDATE orders SET status = 'pending' WHERE status IN ('pending_payment', 'payment_failed');
+
+    ALTER TABLE orders DROP CONSTRAINT orders_status_check;
+
+    ALTER TABLE orders ADD CONSTRAINT orders_status_check
+        CHECK (status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'));
+  000002_add_pending_payment_status.up.sql: |
+    ALTER TABLE orders DROP CONSTRAINT orders_status_check;
+
+    ALTER TABLE orders ADD CONSTRAINT orders_status_check
+        CHECK (status IN ('pending', 'pending_payment', 'payment_failed', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'));
+  000003_add_outbox.down.sql: |
+    DROP TABLE processed_events;
+
+    DROP INDEX IF EXISTS idx_outbox_unpublished;
+    DROP TABLE outbox_messages;
+  000003_add_outbox.up.sql: |
+    -- Transactional outbox: domain events are written here in the same transaction as the state
+    -- change they describe, and a relay publishes them to Kafka.
+    CREATE TABLE outbox_messages (
+        id UUID PRIMARY KEY,
+        topic VARCHAR(255) NOT NULL,
+        event_type VARCHAR(255) NOT NULL,
+        aggregate_id VARCHAR(255) NOT NULL,
+        payload JSONB NOT NULL,
+        correlation_id VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        published_at TIMESTAMP WITH TIME ZONE,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+    );
+
+    -- Speeds up the relay's poll for unpublished rows without scanning already published ones.
+    CREATE INDEX idx_outbox_unpublished ON outbox_messages (created_at) WHERE published_at IS NULL;
+
+    -- Records handled Kafka event ids so consumers can recognize redelivered messages.
+    CREATE TABLE processed_events (
+        event_id UUID PRIMARY KEY,
+        event_type VARCHAR(255) NOT NULL,
+        processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+  000004_add_order_sagas.down.sql: |
+    DROP TRIGGER IF EXISTS update_order_sagas_updated_at ON order_sagas;
+    DROP INDEX IF EXISTS idx_order_sagas_state;
+    DROP TABLE order_sagas;
+  000004_add_order_sagas.up.sql: |
+    -- Tracks the order saga so a failed payment or a later downstream failure knows what to undo:
+    -- release the stock reservation, refund the payment, or both, in reverse order of the steps that
+    -- created the order.
+    CREATE TABLE order_sagas (
+        order_id UUID PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+        state VARCHAR(50) NOT NULL CHECK (state IN (
+            'started', 'stock_reserved', 'awaiting_payment', 'paid',
+            'completed', 'compensating', 'compensated', 'failed'
+        )),
+        reservation_id UUID,
+        payment_id UUID,
+        last_error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX idx_order_sagas_state ON order_sagas(state);
+
+    CREATE TRIGGER update_order_sagas_updated_at
+        BEFORE UPDATE ON order_sagas
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-migrations
+  namespace: eventflow
+data:
+  000001_create_event_store.down.sql: |
+    -- Drop constraints
+    ALTER TABLE payment_status DROP CONSTRAINT IF EXISTS chk_positive_amount;
+
+    -- Drop indexes
+    DROP INDEX IF EXISTS idx_payment_snapshots_latest;
+    DROP INDEX IF EXISTS idx_payment_events_unique_version;
+
+    DROP INDEX IF EXISTS idx_payment_status_created_at;
+    DROP INDEX IF EXISTS idx_payment_status_status;
+    DROP INDEX IF EXISTS idx_payment_status_order_id;
+    DROP INDEX IF EXISTS idx_payment_status_customer_id;
+
+    DROP INDEX IF EXISTS idx_payment_snapshots_version;
+    DROP INDEX IF EXISTS idx_payment_snapshots_aggregate_id;
+
+    DROP INDEX IF EXISTS idx_payment_events_initiated_order_id;
+    DROP INDEX IF EXISTS idx_payment_events_aggregate_version;
+    DROP INDEX IF EXISTS idx_payment_events_sequence;
+    DROP INDEX IF EXISTS idx_payment_events_occurred_at;
+    DROP INDEX IF EXISTS idx_payment_events_event_type;
+    DROP INDEX IF EXISTS idx_payment_events_aggregate_type;
+    DROP INDEX IF EXISTS idx_payment_events_aggregate_id;
+
+    -- Drop tables
+    DROP TABLE IF EXISTS payment_status;
+    DROP TABLE IF EXISTS payment_snapshots;
+    DROP TABLE IF EXISTS payment_events;
+  000001_create_event_store.up.sql: |
+    -- Enable UUID extension
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    -- Create event store table for Event Sourcing
+    CREATE TABLE payment_events (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        aggregate_id UUID NOT NULL,
+        aggregate_type VARCHAR(100) NOT NULL DEFAULT 'payment',
+        event_type VARCHAR(100) NOT NULL,
+        event_version INTEGER NOT NULL,
+        event_data JSONB NOT NULL,
+        metadata JSONB,
+        occurred_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        sequence_number BIGSERIAL
+    );
+
+    -- Create payment snapshots table for performance optimization
+    CREATE TABLE payment_snapshots (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        aggregate_id UUID NOT NULL,
+        aggregate_version INTEGER NOT NULL,
+        snapshot_data JSONB NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    -- Create payment read model for queries
+    CREATE TABLE payment_status (
+        id UUID PRIMARY KEY,
+        customer_id UUID NOT NULL,
+        order_id UUID,
+        amount_cents BIGINT NOT NULL,
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        status VARCHAR(50) NOT NULL CHECK (status IN ('initiated', 'processing', 'completed', 'failed', 'refunded', 'cancelled')),
+        payment_method VARCHAR(50),
+        transaction_id VARCHAR(255),
+        gateway_response JSONB,
+        created_at TIMESTAMP WITH TIME ZONE,
+        updated_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        version INTEGER NOT NULL
+    );
+
+    -- Create indexes for event store
+    CREATE INDEX idx_payment_events_aggregate_id ON payment_events(aggregate_id);
+    CREATE INDEX idx_payment_events_aggregate_type ON payment_events(aggregate_type);
+    CREATE INDEX idx_payment_events_event_type ON payment_events(event_type);
+    CREATE INDEX idx_payment_events_occurred_at ON payment_events(occurred_at DESC);
+    CREATE INDEX idx_payment_events_sequence ON payment_events(sequence_number);
+
+    -- Composite index for event reconstruction
+    CREATE INDEX idx_payment_events_aggregate_version ON payment_events(aggregate_id, event_version);
+
+    -- Index to find the payment initiated for an order, used for idempotent payment creation
+    CREATE INDEX idx_payment_events_initiated_order_id ON payment_events ((event_data ->> 'order_id'))
+        WHERE event_type = 'payment.initiated';
+
+    -- Create indexes for snapshots
+    CREATE INDEX idx_payment_snapshots_aggregate_id ON payment_snapshots(aggregate_id);
+    CREATE INDEX idx_payment_snapshots_version ON payment_snapshots(aggregate_id, aggregate_version DESC);
+
+    -- Create indexes for read model
+    CREATE INDEX idx_payment_status_customer_id ON payment_status(customer_id);
+    CREATE INDEX idx_payment_status_order_id ON payment_status(order_id);
+    CREATE INDEX idx_payment_status_status ON payment_status(status);
+    CREATE INDEX idx_payment_status_created_at ON payment_status(created_at DESC);
+
+    -- Create unique constraint to ensure event ordering
+    CREATE UNIQUE INDEX idx_payment_events_unique_version ON payment_events(aggregate_id, event_version);
+
+    -- Create unique constraint for latest snapshot
+    CREATE UNIQUE INDEX idx_payment_snapshots_latest ON payment_snapshots(aggregate_id, aggregate_version DESC);
+
+    -- Add constraint to ensure positive amounts
+    ALTER TABLE payment_status ADD CONSTRAINT chk_positive_amount CHECK (amount_cents >= 0);
+  000002_add_outbox.down.sql: |
+    DROP TABLE processed_events;
+
+    DROP INDEX IF EXISTS idx_outbox_unpublished;
+    DROP TABLE outbox_messages;
+  000002_add_outbox.up.sql: |
+    -- Transactional outbox: domain events are written here in the same transaction as the state
+    -- change they describe, and a relay publishes them to Kafka.
+    CREATE TABLE outbox_messages (
+        id UUID PRIMARY KEY,
+        topic VARCHAR(255) NOT NULL,
+        event_type VARCHAR(255) NOT NULL,
+        aggregate_id VARCHAR(255) NOT NULL,
+        payload JSONB NOT NULL,
+        correlation_id VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        published_at TIMESTAMP WITH TIME ZONE,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+    );
+
+    -- Speeds up the relay's poll for unpublished rows without scanning already published ones.
+    CREATE INDEX idx_outbox_unpublished ON outbox_messages (created_at) WHERE published_at IS NULL;
+
+    -- Records handled Kafka event ids so consumers can recognize redelivered messages.
+    CREATE TABLE processed_events (
+        event_id UUID PRIMARY KEY,
+        event_type VARCHAR(255) NOT NULL,
+        processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-migrations
+  namespace: eventflow
+data:
+  000001_create_inventory_tables.down.sql: |
+    -- Drop triggers
+    DROP TRIGGER IF EXISTS update_inventory_updated_at ON inventory;
+    DROP TRIGGER IF EXISTS update_products_updated_at ON products;
+
+    -- Drop trigger function
+    DROP FUNCTION IF EXISTS update_updated_at_column();
+
+    -- Drop indexes
+    DROP INDEX IF EXISTS idx_categories_name;
+    DROP INDEX IF EXISTS idx_categories_parent;
+
+    DROP INDEX IF EXISTS idx_inventory_movements_created_at;
+    DROP INDEX IF EXISTS idx_inventory_movements_reference;
+    DROP INDEX IF EXISTS idx_inventory_movements_type;
+    DROP INDEX IF EXISTS idx_inventory_movements_product_id;
+
+    DROP INDEX IF EXISTS idx_inventory_product_warehouse;
+    DROP INDEX IF EXISTS idx_inventory_reorder_level;
+    DROP INDEX IF EXISTS idx_inventory_quantity_available;
+    DROP INDEX IF EXISTS idx_inventory_warehouse_id;
+    DROP INDEX IF EXISTS idx_inventory_product_id;
+
+    DROP INDEX IF EXISTS idx_products_created_at;
+    DROP INDEX IF EXISTS idx_products_is_active;
+    DROP INDEX IF EXISTS idx_products_brand;
+    DROP INDEX IF EXISTS idx_products_category;
+    DROP INDEX IF EXISTS idx_products_name;
+    DROP INDEX IF EXISTS idx_products_sku;
+
+    -- Drop tables (order matters due to foreign keys)
+    DROP TABLE IF EXISTS inventory_movements;
+    DROP TABLE IF EXISTS inventory;
+    DROP TABLE IF EXISTS product_categories;
+    DROP TABLE IF EXISTS products;
+  000001_create_inventory_tables.up.sql: |
+    -- Enable UUID extension
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    -- Create products table
+    CREATE TABLE products (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        sku VARCHAR(100) UNIQUE NOT NULL,
+        category VARCHAR(100),
+        brand VARCHAR(100),
+        price_cents BIGINT NOT NULL CHECK (price_cents >= 0),
+        cost_cents BIGINT CHECK (cost_cents >= 0),
+        currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+        weight DECIMAL(8,3),
+        dimensions JSONB, -- {length, width, height}
+        attributes JSONB, -- flexible product attributes
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        version INTEGER DEFAULT 1
+    );
+
+    -- Create inventory table for stock management
+    CREATE TABLE inventory (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        warehouse_id UUID, -- for multi-warehouse support
+        quantity_available INTEGER NOT NULL DEFAULT 0 CHECK (quantity_available >= 0),
+        quantity_reserved INTEGER NOT NULL DEFAULT 0 CHECK (quantity_reserved >= 0),
+        quantity_total INTEGER GENERATED ALWAYS AS (quantity_available + quantity_reserved) STORED,
+        reorder_level INTEGER DEFAULT 0,
+        max_stock_level INTEGER,
+        last_restocked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        version INTEGER DEFAULT 1
+    );
+
+    -- Create inventory movements table for tracking stock changes
+    CREATE TABLE inventory_movements (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        product_id UUID NOT NULL REFERENCES products(id),
+        movement_type VARCHAR(50) NOT NULL CHECK (movement_type IN ('purchase', 'sale', 'adjustment', 'return', 'transfer', 'reservation', 'release')),
+        quantity INTEGER NOT NULL, -- positive for inbound, negative for outbound
+        reference_id UUID, -- order_id, purchase_id, etc.
+        reference_type VARCHAR(50), -- 'order', 'purchase', 'adjustment', etc.
+        reason TEXT,
+        cost_per_unit_cents BIGINT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        created_by UUID -- user who made the movement
+    );
+
+    -- Create product categories table
+    CREATE TABLE product_categories (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name VARCHAR(100) UNIQUE NOT NULL,
+        description TEXT,
+        parent_category_id UUID REFERENCES product_categories(id),
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    -- Create indexes for products
+    CREATE INDEX idx_products_sku ON products(sku);
+    CREATE INDEX idx_products_name ON products(name);
+    CREATE INDEX idx_products_category ON products(category);
+    CREATE INDEX idx_products_brand ON products(brand);
+    CREATE INDEX idx_products_is_active ON products(is_active);
+    CREATE INDEX idx_products_created_at ON products(created_at DESC);
+
+    -- Create indexes for inventory
+    CREATE INDEX idx_inventory_product_id ON inventory(product_id);
+    CREATE INDEX idx_inventory_warehouse_id ON inventory(warehouse_id);
+    CREATE INDEX idx_inventory_quantity_available ON inventory(quantity_available);
+    CREATE INDEX idx_inventory_reorder_level ON inventory(reorder_level);
+
+    -- Create unique constraint for product-warehouse combination
+    CREATE UNIQUE INDEX idx_inventory_product_warehouse ON inventory(product_id, warehouse_id);
+
+    -- Create indexes for inventory movements
+    CREATE INDEX idx_inventory_movements_product_id ON inventory_movements(product_id);
+    CREATE INDEX idx_inventory_movements_type ON inventory_movements(movement_type);
+    CREATE INDEX idx_inventory_movements_reference ON inventory_movements(reference_id, reference_type);
+    CREATE INDEX idx_inventory_movements_created_at ON inventory_movements(created_at DESC);
+
+    -- Create indexes for categories
+    CREATE INDEX idx_categories_parent ON product_categories(parent_category_id);
+    CREATE INDEX idx_categories_name ON product_categories(name);
+
+    -- Create trigger function for updated_at
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    -- Create triggers for updated_at
+    CREATE TRIGGER update_products_updated_at
+        BEFORE UPDATE ON products
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+
+    CREATE TRIGGER update_inventory_updated_at
+        BEFORE UPDATE ON inventory
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+  000002_add_reservations.down.sql: |
+    DROP TRIGGER IF EXISTS update_inventory_reservations_updated_at ON inventory_reservations;
+
+    DROP INDEX IF EXISTS idx_inventory_reservations_status;
+    DROP INDEX IF EXISTS idx_inventory_reservations_order_product;
+
+    DROP TABLE IF EXISTS inventory_reservations;
+
+    DROP INDEX IF EXISTS idx_inventory_product_warehouse;
+    CREATE UNIQUE INDEX idx_inventory_product_warehouse ON inventory (product_id, warehouse_id);
+  000002_add_reservations.up.sql: |
+    -- Recreate the product/warehouse index treating NULL warehouses as equal, so a product without a
+    -- warehouse cannot get more than one inventory row.
+    DROP INDEX IF EXISTS idx_inventory_product_warehouse;
+    CREATE UNIQUE INDEX idx_inventory_product_warehouse ON inventory (product_id, warehouse_id) NULLS NOT DISTINCT;
+
+    CREATE TABLE inventory_reservations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        order_id UUID NOT NULL,
+        product_id UUID NOT NULL REFERENCES products(id),
+        quantity INTEGER NOT NULL CHECK (quantity > 0),
+        status VARCHAR(20) NOT NULL CHECK (status IN ('reserved', 'released', 'committed')),
+        expires_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX idx_inventory_reservations_order_product ON inventory_reservations (order_id, product_id);
+    CREATE INDEX idx_inventory_reservations_status ON inventory_reservations (status);
+
+    CREATE TRIGGER update_inventory_reservations_updated_at
+        BEFORE UPDATE ON inventory_reservations
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+  000003_add_outbox.down.sql: |
+    DROP TABLE processed_events;
+
+    DROP INDEX IF EXISTS idx_outbox_unpublished;
+    DROP TABLE outbox_messages;
+  000003_add_outbox.up.sql: |
+    -- Transactional outbox: domain events are written here in the same transaction as the state
+    -- change they describe, and a relay publishes them to Kafka.
+    CREATE TABLE outbox_messages (
+        id UUID PRIMARY KEY,
+        topic VARCHAR(255) NOT NULL,
+        event_type VARCHAR(255) NOT NULL,
+        aggregate_id VARCHAR(255) NOT NULL,
+        payload JSONB NOT NULL,
+        correlation_id VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        published_at TIMESTAMP WITH TIME ZONE,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+    );
+
+    -- Speeds up the relay's poll for unpublished rows without scanning already published ones.
+    CREATE INDEX idx_outbox_unpublished ON outbox_messages (created_at) WHERE published_at IS NULL;
+
+    -- Records handled Kafka event ids so consumers can recognize redelivered messages.
+    CREATE TABLE processed_events (
+        event_id UUID PRIMARY KEY,
+        event_type VARCHAR(255) NOT NULL,
+        processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+---
+# Migration Jobs are not wired into any ordering primitive kustomize or plain kubectl understand;
+# apply this file and wait for all four Jobs to complete before applying the Deployments:
+#   kubectl apply -f infrastructure/k8s/base/migrations.yaml
+#   kubectl wait --for=condition=complete job -l eventflow.io/phase=migrate -n eventflow --timeout=300s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: order-migrate
+  namespace: eventflow
+  labels:
+    app: order-migrate
+    eventflow.io/phase: migrate
+  annotations:
+    eventflow.io/run-before: "order-service"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: order-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: migrate/migrate:v4.17.0
+          args:
+            - "-path"
+            - "/migrations"
+            - "-database"
+            - "$(ORDER_DATABASE_URL)"
+            - "up"
+          env:
+            - name: ORDER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eventflow-secrets
+                  key: ORDER_DATABASE_URL
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: order-migrations
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: payment-migrate
+  namespace: eventflow
+  labels:
+    app: payment-migrate
+    eventflow.io/phase: migrate
+  annotations:
+    eventflow.io/run-before: "payment-service"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: payment-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: migrate/migrate:v4.17.0
+          args:
+            - "-path"
+            - "/migrations"
+            - "-database"
+            - "$(PAYMENT_DATABASE_URL)"
+            - "up"
+          env:
+            - name: PAYMENT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eventflow-secrets
+                  key: PAYMENT_DATABASE_URL
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: payment-migrations
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inventory-migrate
+  namespace: eventflow
+  labels:
+    app: inventory-migrate
+    eventflow.io/phase: migrate
+  annotations:
+    eventflow.io/run-before: "inventory-service"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: inventory-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: migrate/migrate:v4.17.0
+          args:
+            - "-path"
+            - "/migrations"
+            - "-database"
+            - "$(INVENTORY_DATABASE_URL)"
+            - "up"
+          env:
+            - name: INVENTORY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eventflow-secrets
+                  key: INVENTORY_DATABASE_URL
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: inventory-migrations
+---
+# Uses the notification service's own image: the Dockerfile already bakes ./migrations in, so,
+# unlike the three Go jobs above, no ConfigMap mount is needed here.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: notification-migrate
+  namespace: eventflow
+  labels:
+    app: notification-migrate
+    eventflow.io/phase: migrate
+  annotations:
+    eventflow.io/run-before: "notification-service"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: notification-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: yoyo
+          image: eventflow-commerce/notification:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - "yoyo"
+            - "apply"
+            - "--batch"
+            - "--database"
+            - "$(NOTIFICATION_DATABASE_URL)"
+            - "./migrations"
+          env:
+            - name: NOTIFICATION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: eventflow-secrets
+                  key: NOTIFICATION_DATABASE_URL

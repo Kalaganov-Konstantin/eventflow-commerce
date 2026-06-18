@@ -13,6 +13,7 @@ import (
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/service"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/metrics"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/middleware"
@@ -53,6 +54,10 @@ func New(opts Options) *Server {
 	}
 	if opts.Redis != nil {
 		checks["redis"] = func(ctx context.Context) error { return opts.Redis.Ping(ctx).Err() }
+	}
+	if len(opts.Config.Kafka.Brokers) > 0 {
+		brokers := opts.Config.Kafka.Brokers
+		checks["kafka"] = func(ctx context.Context) error { return events.Healthy(ctx, brokers) }
 	}
 
 	mux := http.NewServeMux()
