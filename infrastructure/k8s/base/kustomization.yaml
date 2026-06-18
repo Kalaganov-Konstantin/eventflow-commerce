@@ -13,3 +13,5 @@ resources:
   - inventory.yaml
   - notification.yaml
   - migrations.yaml
+  - hpa.yaml
+  - pdb.yaml
