@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # Three replicas for the two services on the request path from every order: the gateway and
+  # order itself. Payment, inventory and notification stay at the base replica count.
+  - path: gateway-prod.yaml
+    target:
+      kind: Deployment
+      name: api-gateway
+  - path: order-prod.yaml
+    target:
+      kind: Deployment
+      name: order-service
+
+  # Node anti-affinity for every application service, so a single node loss cannot take out
+  # every replica of one service at once.
+  - path: payment-prod.yaml
+    target:
+      kind: Deployment
+      name: payment-service
+  - path: inventory-prod.yaml
+    target:
+      kind: Deployment
+      name: inventory-service
+  - path: notification-prod.yaml
+    target:
+      kind: Deployment
+      name: notification-service
+
+  - path: config-prod.yaml
+    target:
+      kind: ConfigMap
+      name: eventflow-config

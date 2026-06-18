@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventflow-config
+data:
+  ENVIRONMENT: development
+  API_GATEWAY_LOGGER_LEVEL: debug
+  API_GATEWAY_LOGGER_ENVIRONMENT: development
+  ORDER_LOGGER_LEVEL: debug
+  ORDER_LOGGER_ENVIRONMENT: development
+  PAYMENT_LOGGER_LEVEL: debug
+  PAYMENT_LOGGER_ENVIRONMENT: development
+  INVENTORY_LOGGER_LEVEL: debug
+  INVENTORY_LOGGER_ENVIRONMENT: development
