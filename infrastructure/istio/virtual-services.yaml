@@ -1,0 +1,104 @@
+# External traffic entering through the ingress gateway lands on api-gateway; everything else is
+# mesh-internal routing between services that already address each other by Service name (see
+# eventflow-config's *_SERVICE_URL values).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: api-gateway
+  namespace: eventflow
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - eventflow-gateway
+  http:
+    - route:
+        - destination:
+            host: api-gateway
+            port:
+              number: 8080
+      timeout: 15s
+      retries:
+        attempts: 2
+        perTryTimeout: 5s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: order-service
+  namespace: eventflow
+spec:
+  hosts:
+    - order-service
+  http:
+    - route:
+        - destination:
+            host: order-service
+            port:
+              number: 8081
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: payment-service
+  namespace: eventflow
+spec:
+  hosts:
+    - payment-service
+  http:
+    - route:
+        - destination:
+            host: payment-service
+            port:
+              number: 8082
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: inventory-service
+  namespace: eventflow
+spec:
+  hosts:
+    - inventory-service
+  http:
+    - route:
+        - destination:
+            host: inventory-service
+            port:
+              number: 8083
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: notification-service
+  namespace: eventflow
+spec:
+  hosts:
+    - notification-service
+  http:
+    - route:
+        - destination:
+            host: notification-service
+            port:
+              number: 8084
+      timeout: 10s
+      retries:
+        attempts: 2
+        perTryTimeout: 3s
+        retryOn: 5xx,reset,connect-failure,refused-stream

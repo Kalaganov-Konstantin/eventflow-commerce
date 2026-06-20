@@ -1,0 +1,19 @@
+# Ingress entry point for the mesh; the sidecar-injected api-gateway Deployment stays the only
+# public entry point behind it, matching the reverse proxy role it already has in compose.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: eventflow-gateway
+  namespace: eventflow
+  labels:
+    app: eventflow-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"
