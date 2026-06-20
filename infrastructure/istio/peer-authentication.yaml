@@ -1,0 +1,10 @@
+# Namespace-wide default: every sidecar-to-sidecar connection inside eventflow must use mutual
+# TLS, no plaintext fallback.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: eventflow
+spec:
+  mtls:
+    mode: STRICT

@@ -1,3 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: inventory-service
+  namespace: eventflow
+  labels:
+    app: inventory-service
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +32,7 @@ spec:
         prometheus.io/port: "8083"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: inventory-service
       terminationGracePeriodSeconds: 30
       containers:
         - name: inventory
