@@ -15,8 +15,16 @@ spec:
     - route:
         - destination:
             host: api-gateway
+            subset: stable
             port:
               number: 8080
+          weight: 100
+        - destination:
+            host: api-gateway
+            subset: canary
+            port:
+              number: 8080
+          weight: 0
       timeout: 15s
       retries:
         attempts: 2
