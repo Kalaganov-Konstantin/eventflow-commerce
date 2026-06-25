@@ -8,6 +8,7 @@ resources:
   - redis.yaml
   - kafka.yaml
   - api-gateway.yaml
+  - api-gateway-canary.yaml
   - order.yaml
   - payment.yaml
   - inventory.yaml

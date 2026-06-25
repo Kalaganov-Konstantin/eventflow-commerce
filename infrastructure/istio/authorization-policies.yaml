@@ -1,0 +1,99 @@
+# Deny-by-default per workload once a policy selects it: api-gateway is the only entry point from
+# outside the mesh, order-service is the only backend that calls another backend directly (the
+# synchronous stock reservation call described in docs/architecture/saga-pattern.md), everything
+# else is reached exclusively through api-gateway. Identities below match the ServiceAccounts each
+# Deployment now runs as (see infrastructure/k8s/base).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-gateway
+  namespace: eventflow
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["istio-system"]
+      to:
+        - operation:
+            ports: ["8080"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: order-service
+  namespace: eventflow
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/eventflow/sa/api-gateway"
+      to:
+        - operation:
+            ports: ["8081"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service
+  namespace: eventflow
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/eventflow/sa/api-gateway"
+      to:
+        - operation:
+            ports: ["8082"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: inventory-service
+  namespace: eventflow
+spec:
+  selector:
+    matchLabels:
+      app: inventory-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/eventflow/sa/api-gateway"
+              - "cluster.local/ns/eventflow/sa/order-service"
+      to:
+        - operation:
+            ports: ["8083"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: notification-service
+  namespace: eventflow
+spec:
+  selector:
+    matchLabels:
+      app: notification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/eventflow/sa/api-gateway"
+      to:
+        - operation:
+            ports: ["8084"]

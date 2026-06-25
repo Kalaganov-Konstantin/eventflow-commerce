@@ -215,6 +215,16 @@ demo: ensure-env docker-build docker-up migrate ## 🎯 Full demo: build and sta
 	@echo "📈 Prometheus: http://localhost:${PROMETHEUS_PORT}"
 	@echo "⚙️ Kafka UI: http://localhost:${KAFKA_UI_PORT}"
 
+SERVICE ?= api-gateway
+
+.PHONY: canary-promote
+canary-promote: ## 🐤 Shift SERVICE's canary through the 5/25/50/100 percent traffic steps
+	@bash scripts/canary.sh promote $(SERVICE)
+
+.PHONY: canary-rollback
+canary-rollback: ## ⏪ Roll SERVICE's canary back to zero traffic
+	@bash scripts/canary.sh rollback $(SERVICE)
+
 .PHONY: ensure-env
 ensure-env: ## 🔐 Create .env file from template if it doesn't exist, with secure JWT secret
 	@if [ ! -f .env ]; then \

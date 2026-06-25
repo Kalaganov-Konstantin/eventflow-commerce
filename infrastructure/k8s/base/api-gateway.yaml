@@ -1,3 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway
+  namespace: eventflow
+  labels:
+    app: api-gateway
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,11 +27,13 @@ spec:
     metadata:
       labels:
         app: api-gateway
+        version: stable
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: api-gateway
       terminationGracePeriodSeconds: 30
       containers:
         - name: api-gateway

@@ -1,3 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service
+  namespace: eventflow
+  labels:
+    app: payment-service
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +32,7 @@ spec:
         prometheus.io/port: "8082"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: payment-service
       terminationGracePeriodSeconds: 30
       containers:
         - name: payment
