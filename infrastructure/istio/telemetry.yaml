@@ -1,0 +1,15 @@
+# Samples a share of mesh requests into the same trace pipeline the services already export to
+# (OTEL_EXPORTER_OTLP_ENDPOINT in eventflow-config, currently http://jaeger:4318). The "otel"
+# provider referenced below is registered once at the mesh level, in the cluster's Istio install
+# (meshConfig.extensionProviders), pointing at that same collector; it is not namespaced config
+# and so is not part of this repository.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: eventflow-tracing
+  namespace: eventflow
+spec:
+  tracing:
+    - providers:
+        - name: otel
+      randomSamplingPercentage: 10
