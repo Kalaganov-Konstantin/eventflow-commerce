@@ -164,6 +164,20 @@ test-python-coverage: ## (internal) Run Python unit tests with coverage
 	@cd services/notification && uv run pytest --cov=notification --cov-report=xml:coverage.xml --cov-report=term-missing
 
 # =============================================================================
+# INTEGRATION TEST DEPENDENCIES
+# =============================================================================
+
+.PHONY: test-deps-up
+test-deps-up: ## (internal) Start postgres, redis and kafka for integration tests
+	@echo "--> Starting integration test dependencies..."
+	@docker-compose -f docker-compose.test.yml up -d --wait
+
+.PHONY: test-deps-down
+test-deps-down: ## (internal) Stop the integration test dependencies
+	@echo "--> Stopping integration test dependencies..."
+	@docker-compose -f docker-compose.test.yml down -v
+
+# =============================================================================
 # DOCKER COMMANDS
 # =============================================================================
 
