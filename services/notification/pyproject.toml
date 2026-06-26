@@ -47,6 +47,12 @@ select = ["E", "F", "I", "UP", "B"]
 line-length = 100
 target-version = ["py312"]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs real postgres and kafka, started with `make test-deps-up`",
+]
+
 [dependency-groups]
 dev = [
     "pytest-asyncio>=1.4.0",
