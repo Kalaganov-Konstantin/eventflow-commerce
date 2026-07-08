@@ -64,6 +64,27 @@ async def test_order_confirmed_creates_notification_row(pool, kafka_producer, co
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_snappy_compressed_event_creates_notification_row(
+    pool, snappy_kafka_producer, consumer
+):
+    """Regression test: the Go services always publish snappy-compressed batches (see
+    shared/libs/go/events/kafka.go), which used to crash the consumer's fetch loop with
+    aiokafka.errors.UnsupportedCodecError before cramjam was added as a dependency."""
+    order_id = uuid.uuid4()
+    customer_id = uuid.uuid4()
+    event = _order_confirmed_event(order_id, customer_id, event_id=str(uuid.uuid4()))
+
+    await asyncio.sleep(CONSUMER_JOIN_DELAY_SECONDS)
+    await snappy_kafka_producer.send_and_wait(ORDERS_TOPIC, json.dumps(event).encode())
+
+    rows = await _wait_for_notifications(pool, order_id, count=1)
+
+    assert len(rows) == 1
+    assert rows[0]["subject"] == f"Order {order_id} confirmed"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_redelivered_event_does_not_duplicate_notification(pool, kafka_producer, consumer):
     order_id = uuid.uuid4()
     customer_id = uuid.uuid4()

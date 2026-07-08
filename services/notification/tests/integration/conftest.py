@@ -66,6 +66,19 @@ async def kafka_producer():
 
 
 @pytest_asyncio.fixture
+async def snappy_kafka_producer():
+    """A real Kafka producer that snappy-compresses its batches, standing in for the Go services,
+    which always publish compressed with snappy (see shared/libs/go/events/kafka.go)."""
+    await _ensure_topics_exist()
+    producer = AIOKafkaProducer(bootstrap_servers=TEST_KAFKA_BROKER, compression_type="snappy")
+    await producer.start()
+    try:
+        yield producer
+    finally:
+        await producer.stop()
+
+
+@pytest_asyncio.fixture
 async def consumer(pool):
     """A real Consumer wired to the integration test broker and database, running in the
     background for the duration of the test."""
