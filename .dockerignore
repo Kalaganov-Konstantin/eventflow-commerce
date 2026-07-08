@@ -55,10 +55,14 @@ infrastructure/
 scripts/
 
 # Tests
-tests/
+# tests/e2e is a go.work member: its go.mod/go.sum must stay in the build context, or `go build`
+# fails resolving the workspace even for services that do not depend on it. Only the parts of
+# tests/ nothing needs to build an image are excluded here.
+tests/performance/
+tests/e2e/*_test.go
 *_test.go
 test_*.py
-**/tests/
+services/*/tests/
 **/migrations/
 
 # Development tools
