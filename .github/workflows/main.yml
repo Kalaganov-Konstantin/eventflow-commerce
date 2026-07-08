@@ -63,6 +63,28 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: true
 
+  # Integration tests need real postgres, redis and kafka, so they run in their own job rather
+  # than alongside the unit tests in `test`. End to end and performance tests are not run here:
+  # they expect a full `make demo` stack, which is a much heavier and slower setup than CI is
+  # meant for; see tests/performance/README.md and the make targets in the README for running
+  # them locally.
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-go
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.0"
+          enable-cache: true
+      - name: Install dependencies
+        run: make setup
+      - name: Run integration tests against real postgres, redis and kafka
+        run: make test-integration
+
   pre-commit-check:
     name: Pre-commit Hooks
     runs-on: ubuntu-latest
