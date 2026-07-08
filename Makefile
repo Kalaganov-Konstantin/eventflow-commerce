@@ -214,6 +214,31 @@ test-integration: ## 🧪 Run integration tests against real postgres, redis and
 	$(MAKE) test-python-integration
 
 # =============================================================================
+# END TO END AND PERFORMANCE TESTS
+# =============================================================================
+
+.PHONY: test-e2e
+test-e2e: ## 🧪 Run the end to end order flow test against a full demo stack
+	@$(MAKE) demo
+	@cd tests/e2e && JWT_SECRET=$(JWT_SECRET) go test -tags=e2e -race ./...
+
+.PHONY: test-performance
+test-performance: ## 🚀 Run the k6 order flow scenario against a full demo stack
+	@$(MAKE) demo
+	@echo "--> Seeding a product for the performance scenario..."
+	@PRODUCT_ID=$$(uuidgen | tr 'A-Z' 'a-z'); \
+	docker-compose exec -T postgres psql -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -c \
+		"INSERT INTO products (id, name, sku, price_cents, currency, is_active, created_at, updated_at, version) VALUES ('$$PRODUCT_ID', 'Load Test Widget', 'PERF-'||substr('$$PRODUCT_ID', 1, 8), 999, 'USD', true, NOW(), NOW(), 1)"; \
+	docker-compose exec -T postgres psql -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -c \
+		"INSERT INTO inventory (product_id, quantity_available, quantity_reserved) VALUES ('$$PRODUCT_ID', 1000000, 0)"; \
+	docker run --rm --add-host=host.docker.internal:host-gateway \
+		-e BASE_URL=http://host.docker.internal:$(API_GATEWAY_PORT) \
+		-e JWT_SECRET=$(JWT_SECRET) \
+		-e PRODUCT_ID=$$PRODUCT_ID \
+		-v $(CURDIR)/tests/performance:/scripts \
+		grafana/k6 run /scripts/order-flow.js
+
+# =============================================================================
 # DOCKER COMMANDS
 # =============================================================================
 
