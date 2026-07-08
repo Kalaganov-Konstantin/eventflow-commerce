@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,6 +267,50 @@ func TestAPIGateway_Integration(t *testing.T) {
 					t.Errorf("Expected backend path %s, got %v", tc.expectedBackendPath, response["path"])
 				}
 			})
+		}
+	})
+
+	// Regression test: the bare collection path (no trailing slash) must reach the backend
+	// directly rather than answer with a redirect, which a client would follow by downgrading a
+	// POST to a GET, losing the request body before the backend ever sees it.
+	t.Run("BareCollectionPathNoRedirect", func(t *testing.T) {
+		claims := &handler.Claims{
+			UserID: "test-user",
+			Email:  "test@example.com",
+			Role:   "user",
+		}
+		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString([]byte(cfg.JWTSecret))
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		req := httptest.NewRequest("POST", "/api/v1/orders", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer "+tokenString)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		srv.GetHTTPServer().Handler.ServeHTTP(w, req)
+
+		if w.Code == http.StatusMovedPermanently || w.Code == http.StatusPermanentRedirect || w.Code == http.StatusTemporaryRedirect {
+			t.Fatalf("POST to the bare collection path got redirected (status %d, Location %q); a client following it would downgrade to GET and lose the body",
+				w.Code, w.Header().Get("Location"))
+		}
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected the backend's response forwarded as-is, got status %d", w.Code)
+		}
+
+		var response map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+		if response["method"] != "POST" {
+			t.Errorf("expected the backend to see method POST, got %v", response["method"])
+		}
+		if response["path"] != "/api/v1/orders" {
+			t.Errorf("expected the backend to see path /api/v1/orders, got %v", response["path"])
 		}
 	})
 
