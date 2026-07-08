@@ -177,6 +177,42 @@ test-deps-down: ## (internal) Stop the integration test dependencies
 	@echo "--> Stopping integration test dependencies..."
 	@docker-compose -f docker-compose.test.yml down -v
 
+.PHONY: test-migrate
+test-migrate: ## (internal) Apply migrations to the integration test databases
+	@echo "--> Applying migrations to the integration test databases..."
+	@for f in services/order/migrations/*.up.sql; do \
+		PGPASSWORD=orders_pass psql -h localhost -p 5433 -U orders_user -d orders -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@for f in services/payment/migrations/*.up.sql; do \
+		PGPASSWORD=payments_pass psql -h localhost -p 5433 -U payments_user -d payments -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@for f in services/inventory/migrations/*.up.sql; do \
+		PGPASSWORD=inventory_pass psql -h localhost -p 5433 -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@cd services/notification && uv run yoyo apply --batch \
+		--database "postgresql://notifications_user:notifications_pass@localhost:5433/notifications" ./migrations
+
+.PHONY: test-go-integration
+test-go-integration: ## (internal) Run Go integration tests (tag integration) against test-deps
+	@echo "--> Running Go integration tests..."
+	@for mod in services/order services/payment services/inventory; do \
+		echo "Integration testing $$mod..."; \
+		(cd "$$mod" && go test -tags=integration -race ./test/...) || exit 1; \
+	done
+
+.PHONY: test-python-integration
+test-python-integration: ## (internal) Run Python integration tests (marker integration) against test-deps
+	@echo "--> Running Python integration tests..."
+	@cd services/notification && uv run pytest -m integration
+
+.PHONY: test-integration
+test-integration: ## 🧪 Run integration tests against real postgres, redis and kafka
+	@trap '$(MAKE) test-deps-down' EXIT; \
+	$(MAKE) test-deps-up && \
+	$(MAKE) test-migrate && \
+	$(MAKE) test-go-integration && \
+	$(MAKE) test-python-integration
+
 # =============================================================================
 # DOCKER COMMANDS
 # =============================================================================

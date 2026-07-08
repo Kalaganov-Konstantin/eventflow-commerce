@@ -187,9 +187,11 @@ func TestOrderIntegration_OutboxRelayPublishesToKafka(t *testing.T) {
 			t.Fatalf("did not find order.created for order %s on %s: %v", order.ID, events.OrdersTopic, err)
 		}
 
+		// The topic may also carry non-event messages, such as ensureTopic's readiness probe;
+		// skip anything that is not a domain event instead of failing on it.
 		var got events.Event
 		if err := json.Unmarshal(msg.Value, &got); err != nil {
-			t.Fatalf("unmarshal kafka message: %v", err)
+			continue
 		}
 		if got.AggregateID != order.ID.String() || got.Type != events.EventTypeOrderCreated {
 			continue
@@ -261,10 +263,6 @@ func TestOrderIntegration_PaymentsConsumerIdempotency(t *testing.T) {
 	t.Cleanup(cancel)
 	go func() { _ = paymentsConsumer.Start(ctx) }()
 
-	// A brand new consumer group starts reading from the topic's current tail, so give it time to
-	// join before publishing the messages it is meant to observe.
-	time.Sleep(2 * time.Second)
-
 	publisher := events.NewPublisher(events.KafkaConfig{Brokers: []string{testKafkaBroker()}})
 	t.Cleanup(func() { _ = publisher.Close() })
 
@@ -275,13 +273,15 @@ func TestOrderIntegration_PaymentsConsumerIdempotency(t *testing.T) {
 		Data: map[string]interface{}{"order_id": orderID.String()},
 	}
 
-	if err := publisher.Publish(ctx, events.PaymentsTopic, event); err != nil {
-		t.Fatalf("publish payment.processed: %v", err)
-	}
-	waitForCondition(t, 15*time.Second, func() bool { return fake.confirmedCount(orderID) == 1 })
+	// A brand new consumer group starts reading from the topic's current tail, so a message
+	// published before the group finishes joining can be missed entirely. Retry publishing the
+	// same event id until it is observed instead of guessing a fixed join delay: the retries are
+	// themselves redeliveries the consumer must already handle idempotently, so they do not
+	// weaken the assertion below.
+	publishUntilConfirmed(ctx, t, publisher, event, fake, orderID)
 
-	// Redeliver the exact same event id: the consumer must recognize it via processed_events and
-	// not confirm the order a second time.
+	// Redeliver the exact same event id once more: the consumer must recognize it via
+	// processed_events and not confirm the order again.
 	if err := publisher.Publish(ctx, events.PaymentsTopic, event); err != nil {
 		t.Fatalf("publish redelivered payment.processed: %v", err)
 	}
@@ -292,15 +292,27 @@ func TestOrderIntegration_PaymentsConsumerIdempotency(t *testing.T) {
 	}
 }
 
-func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+// publishUntilConfirmed publishes event to payments.events and waits for it to be reflected in
+// fake, republishing on a short interval until it is observed or the overall deadline expires.
+func publishUntilConfirmed(ctx context.Context, t *testing.T, publisher *events.Publisher, event events.Event, fake *fakeOrderService, orderID uuid.UUID) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if err := publisher.Publish(ctx, events.PaymentsTopic, event); err != nil {
+			t.Fatalf("publish payment.processed: %v", err)
 		}
-		time.Sleep(200 * time.Millisecond)
+
+		attemptDeadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(attemptDeadline) {
+			if fake.confirmedCount(orderID) == 1 {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("order was not confirmed within the overall timeout")
+		}
 	}
-	t.Fatalf("condition not met within %s", timeout)
 }

@@ -99,27 +99,30 @@ func ensureTopic(t *testing.T, topic string) {
 	}
 
 	// CreateTopics returning success only means the controller accepted the request, not that the
-	// topic's metadata has propagated to the broker handling produce requests yet; a message
-	// published too soon after still fails with "unknown topic or partition".
-	deadline := time.Now().Add(10 * time.Second)
+	// topic is actually ready to accept produce requests on the broker yet: a message published
+	// too soon after still fails with "unknown topic or partition", and so does a metadata-only
+	// readiness check, so this probes with a real (throwaway) produce instead.
+	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if partitionsExist(topic) {
+		if canProduce(topic) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("topic %s did not become ready in time", topic)
+			t.Fatalf("topic %s did not become ready to accept writes in time", topic)
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
-func partitionsExist(topic string) bool {
-	conn, err := kafka.Dial("tcp", testKafkaBroker())
-	if err != nil {
-		return false
+func canProduce(topic string) bool {
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(testKafkaBroker()),
+		Topic:    topic,
+		Balancer: &kafka.LeastBytes{},
 	}
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = writer.Close() }()
 
-	partitions, err := conn.ReadPartitions(topic)
-	return err == nil && len(partitions) > 0
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return writer.WriteMessages(ctx, kafka.Message{Value: []byte("readiness-probe")}) == nil
 }
