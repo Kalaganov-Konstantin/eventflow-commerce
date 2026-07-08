@@ -6,4 +6,5 @@ use (
 	./services/order
 	./services/payment
 	./shared/libs/go
+	./tests/e2e
 )

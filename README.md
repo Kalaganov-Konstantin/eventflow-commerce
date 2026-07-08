@@ -109,10 +109,15 @@ For full project documentation, please see the `/docs` directory:
 
 ```bash
 make test           # Run unit tests
-make test-integration # Run integration tests
-make test-e2e       # Run end-to-end tests
-make test-performance # Run performance tests
+make test-integration # Run integration tests, against real postgres, redis and kafka
+make test-e2e       # Run the end-to-end order flow test, against a full `make demo` stack
+make test-performance # Run the k6 performance scenario, against a full `make demo` stack
 ```
+
+CI runs `make test` and `make test-integration` on every push and pull request. `make test-e2e`
+and `make test-performance` are not run in CI: both expect a full `make demo` stack already up,
+which is heavier and slower than CI is meant for. Run them locally or against a staging
+environment instead.
 
 ## 🤝 Contributing
 

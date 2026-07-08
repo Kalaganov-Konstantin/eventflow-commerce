@@ -1,5 +1,8 @@
 run:
   timeout: 5m
+  build-tags:
+    - integration
+    - e2e
 
 linters:
   disable-all: true

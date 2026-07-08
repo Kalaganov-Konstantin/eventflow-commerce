@@ -188,12 +188,22 @@ func (r *Router) SetupRoutes() {
 	r.mux.HandleFunc("/health/live", r.livenessCheck)
 	r.mux.HandleFunc("/health/ready", r.readinessCheck)
 
-	// API routes with service-specific prefixes; the backend receives the full path
+	// API routes with service-specific prefixes; the backend receives the full path. Each
+	// resource is registered both as a subtree ("/api/v1/orders/", for sub-resources like
+	// /api/v1/orders/123) and as its own bare collection path ("/api/v1/orders", for POST and
+	// list). Without the second registration, ServeMux answers the bare path with a redirect to
+	// the subtree pattern, and a client following it downgrades a POST to a GET, silently losing
+	// the request body before it ever reaches the backend.
 	r.mux.HandleFunc("/api/v1/orders/", r.createProxyHandler(backendOrder))
+	r.mux.HandleFunc("/api/v1/orders", r.createProxyHandler(backendOrder))
 	r.mux.HandleFunc("/api/v1/payments/", r.createProxyHandler(backendPayment))
+	r.mux.HandleFunc("/api/v1/payments", r.createProxyHandler(backendPayment))
 	r.mux.HandleFunc("/api/v1/inventory/", r.createProxyHandler(backendInventory))
+	r.mux.HandleFunc("/api/v1/inventory", r.createProxyHandler(backendInventory))
 	r.mux.HandleFunc("/api/v1/products/", r.createProxyHandler(backendInventory))
+	r.mux.HandleFunc("/api/v1/products", r.createProxyHandler(backendInventory))
 	r.mux.HandleFunc("/api/v1/notifications/", r.createProxyHandler(backendNotification))
+	r.mux.HandleFunc("/api/v1/notifications", r.createProxyHandler(backendNotification))
 
 	// Catch-all for unmapped API routes; more specific patterns above win.
 	r.mux.HandleFunc("/api/v1/", r.notFoundHandler)

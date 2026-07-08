@@ -1,5 +1,9 @@
 -include .env
 
+# GitHub-hosted runners ship the `docker compose` plugin but not the standalone `docker-compose`
+# binary; Docker Desktop's shim provides both locally, which is why this went unnoticed until CI.
+COMPOSE := $(shell command -v docker-compose >/dev/null 2>&1 && echo docker-compose || echo docker compose)
+
 .PHONY: help
 help: ## ✨ Show this help message
 	@echo 'Usage: make [target]'
@@ -49,22 +53,22 @@ migrate: migrate-order migrate-payment migrate-inventory migrate-notification ##
 .PHONY: migrate-order
 migrate-order: ## (internal) Run database migrations for the order service
 	@echo "--> Running migrations for 'order' service..."
-	@docker-compose run --rm order-migrate
+	@$(COMPOSE) run --rm order-migrate
 
 .PHONY: migrate-payment
 migrate-payment: ## (internal) Run database migrations for the payment service
 	@echo "--> Running migrations for 'payment' service..."
-	@docker-compose run --rm payment-migrate
+	@$(COMPOSE) run --rm payment-migrate
 
 .PHONY: migrate-inventory
 migrate-inventory: ## (internal) Run database migrations for the inventory service
 	@echo "--> Running migrations for 'inventory' service..."
-	@docker-compose run --rm inventory-migrate
+	@$(COMPOSE) run --rm inventory-migrate
 
 .PHONY: migrate-notification
 migrate-notification: ## (internal) Run database migrations for the notification service
 	@echo "--> Running migrations for 'notification' service..."
-	@docker-compose run --rm notification-migrate
+	@$(COMPOSE) run --rm notification-migrate
 
 # --- Linting ---
 .PHONY: lint-go
@@ -164,46 +168,121 @@ test-python-coverage: ## (internal) Run Python unit tests with coverage
 	@cd services/notification && uv run pytest --cov=notification --cov-report=xml:coverage.xml --cov-report=term-missing
 
 # =============================================================================
+# INTEGRATION TEST DEPENDENCIES
+# =============================================================================
+
+.PHONY: test-deps-up
+test-deps-up: ## (internal) Start postgres, redis and kafka for integration tests
+	@echo "--> Starting integration test dependencies..."
+	@$(COMPOSE) -f docker-compose.test.yml up -d --wait
+
+.PHONY: test-deps-down
+test-deps-down: ## (internal) Stop the integration test dependencies
+	@echo "--> Stopping integration test dependencies..."
+	@$(COMPOSE) -f docker-compose.test.yml down -v
+
+.PHONY: test-migrate
+test-migrate: ## (internal) Apply migrations to the integration test databases
+	@echo "--> Applying migrations to the integration test databases..."
+	@for f in services/order/migrations/*.up.sql; do \
+		PGPASSWORD=orders_pass psql -h localhost -p 5433 -U orders_user -d orders -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@for f in services/payment/migrations/*.up.sql; do \
+		PGPASSWORD=payments_pass psql -h localhost -p 5433 -U payments_user -d payments -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@for f in services/inventory/migrations/*.up.sql; do \
+		PGPASSWORD=inventory_pass psql -h localhost -p 5433 -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -f "$$f" || exit 1; \
+	done
+	@cd services/notification && uv run yoyo apply --batch \
+		--database "postgresql://notifications_user:notifications_pass@localhost:5433/notifications" ./migrations
+
+.PHONY: test-go-integration
+test-go-integration: ## (internal) Run Go integration tests (tag integration) against test-deps
+	@echo "--> Running Go integration tests..."
+	@for mod in services/order services/payment services/inventory; do \
+		echo "Integration testing $$mod..."; \
+		(cd "$$mod" && go test -tags=integration -race ./test/...) || exit 1; \
+	done
+
+.PHONY: test-python-integration
+test-python-integration: ## (internal) Run Python integration tests (marker integration) against test-deps
+	@echo "--> Running Python integration tests..."
+	@cd services/notification && uv run pytest -m integration
+
+.PHONY: test-integration
+test-integration: ## 🧪 Run integration tests against real postgres, redis and kafka
+	@trap '$(MAKE) test-deps-down' EXIT; \
+	$(MAKE) test-deps-up && \
+	$(MAKE) test-migrate && \
+	$(MAKE) test-go-integration && \
+	$(MAKE) test-python-integration
+
+# =============================================================================
+# END TO END AND PERFORMANCE TESTS
+# =============================================================================
+
+.PHONY: test-e2e
+test-e2e: ## 🧪 Run the end to end order flow test against a full demo stack
+	@$(MAKE) demo
+	@cd tests/e2e && JWT_SECRET=$(JWT_SECRET) go test -tags=e2e -race ./...
+
+.PHONY: test-performance
+test-performance: ## 🚀 Run the k6 order flow scenario against a full demo stack
+	@$(MAKE) demo
+	@echo "--> Seeding a product for the performance scenario..."
+	@PRODUCT_ID=$$(uuidgen | tr 'A-Z' 'a-z'); \
+	$(COMPOSE) exec -T postgres psql -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -c \
+		"INSERT INTO products (id, name, sku, price_cents, currency, is_active, created_at, updated_at, version) VALUES ('$$PRODUCT_ID', 'Load Test Widget', 'PERF-'||substr('$$PRODUCT_ID', 1, 8), 999, 'USD', true, NOW(), NOW(), 1)"; \
+	$(COMPOSE) exec -T postgres psql -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -c \
+		"INSERT INTO inventory (product_id, quantity_available, quantity_reserved) VALUES ('$$PRODUCT_ID', 1000000, 0)"; \
+	docker run --rm --add-host=host.docker.internal:host-gateway \
+		-e BASE_URL=http://host.docker.internal:$(API_GATEWAY_PORT) \
+		-e JWT_SECRET=$(JWT_SECRET) \
+		-e PRODUCT_ID=$$PRODUCT_ID \
+		-v $(CURDIR)/tests/performance:/scripts \
+		grafana/k6 run /scripts/order-flow.js
+
+# =============================================================================
 # DOCKER COMMANDS
 # =============================================================================
 
 .PHONY: docker-build
 docker-build: ## 🐳 Build all Docker images
 	@echo "--> Building all Docker images..."
-	@docker-compose build
+	@$(COMPOSE) build
 
 .PHONY: docker-up
 docker-up: ## 🚀 Start all services with Docker Compose
 	@echo "--> Starting all services and waiting for them to be healthy..."
-	@docker-compose up -d --wait
+	@$(COMPOSE) up -d --wait
 
 .PHONY: docker-down
 docker-down: ## 🛑 Stop all services
 	@echo "--> Stopping all services..."
-	@docker-compose down
+	@$(COMPOSE) down
 
 .PHONY: docker-logs
 docker-logs: ## 📋 Show logs from all services
-	@docker-compose logs -f
+	@$(COMPOSE) logs -f
 
 .PHONY: docker-clean
 docker-clean: ## 🧹 Clean Docker images and containers
 	@echo "--> Cleaning Docker resources..."
-	@docker-compose down -v
+	@$(COMPOSE) down -v
 	@docker system prune -f
 	@docker volume prune -f
 
 .PHONY: logging-up
 logging-up: ## 📚 Start the logging stack (elasticsearch, kibana, fluentd)
 	@echo "--> Starting the logging stack and waiting for it to be healthy..."
-	@docker-compose --profile logging up -d --wait elasticsearch kibana fluentd
+	@$(COMPOSE) --profile logging up -d --wait elasticsearch kibana fluentd
 	@echo "✅ Logging stack is running!"
 	@echo "📚 Kibana: http://localhost:${KIBANA_PORT}"
 
 .PHONY: logging-down
 logging-down: ## 🛑 Stop the logging stack
 	@echo "--> Stopping the logging stack..."
-	@docker-compose --profile logging down elasticsearch kibana fluentd
+	@$(COMPOSE) --profile logging down elasticsearch kibana fluentd
 
 
 .PHONY: demo
