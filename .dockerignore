@@ -63,7 +63,14 @@ tests/e2e/*_test.go
 *_test.go
 test_*.py
 services/*/tests/
-**/migrations/
+# The Go services migrate through the migrate/migrate CLI, which mounts each service's
+# migrations/ from the host rather than reading it from the built image, so those stay excluded.
+# notification-migrate is different: it runs yoyo from inside the notification-service image
+# itself, so its migrations/ must actually be copied in, or `yoyo apply ./migrations` finds
+# nothing to apply.
+services/order/migrations/
+services/payment/migrations/
+services/inventory/migrations/
 
 # Development tools
 Makefile
