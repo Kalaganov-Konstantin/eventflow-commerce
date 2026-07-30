@@ -1,0 +1,157 @@
+openapi: 3.0.3
+info:
+  title: Notification Service API
+  description: >
+    Read-only lookup of notifications the service created for orders.events and
+    payments.events. There is no send endpoint: notifications are created by the Kafka
+    consumer (see notification/consumer.py), not by an HTTP call. Delivery itself is email
+    only today; an SMS sender interface exists but nothing wires it in yet.
+  version: "1.0.0"
+  license:
+    name: MIT
+    url: https://github.com/Kalaganov-Konstantin/eventflow-commerce/blob/main/LICENSE
+servers:
+  - url: http://localhost:8080
+    description: Through the API Gateway (local docker compose stack)
+  - url: http://localhost:8084
+    description: Directly against the notification service
+tags:
+  - name: notifications
+    description: Read-only lookup of notifications created from Kafka events
+paths:
+  /api/v1/notifications:
+    get:
+      operationId: listNotifications
+      tags: [notifications]
+      summary: List notifications for the current recipient
+      security:
+        - CustomerHeader: []
+      parameters:
+        - $ref: "#/components/parameters/XUserID"
+      responses:
+        "200":
+          description: Notifications addressed to the recipient, most recent first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notification"
+        "400":
+          description: X-User-ID is missing or not a valid uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/notifications/{notification_id}:
+    get:
+      operationId: getNotification
+      tags: [notifications]
+      summary: Get a single notification
+      description: Not scoped to a recipient; the handler does not check X-User-ID.
+      security: []
+      parameters:
+        - name: notification_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The notification
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "404":
+          description: Notification not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  securitySchemes:
+    CustomerHeader:
+      type: apiKey
+      in: header
+      name: X-User-ID
+      description: >
+        Recipient id, set by the API Gateway from the caller's validated JWT. A client calling
+        the notification service directly must set it itself; there is no bearer token check at
+        this layer.
+  parameters:
+    XUserID:
+      name: X-User-ID
+      in: header
+      required: true
+      description: Recipient id, set by the API Gateway from the validated JWT
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Error:
+      description: >
+        FastAPI's default HTTPException body. Unlike the Go services, the notification
+        service does not use the shared AppError shape.
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+    Notification:
+      type: object
+      required:
+        - id
+        - recipient_id
+        - recipient_address
+        - type
+        - body
+        - status
+        - retry_count
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        recipient_id:
+          type: string
+          format: uuid
+        recipient_address:
+          type: string
+          description: Delivery address for the channel, an email address for the only wired sender
+        type:
+          type: string
+          enum: [email, sms, push, webhook]
+        subject:
+          type: string
+          nullable: true
+        body:
+          type: string
+        status:
+          type: string
+          enum: [pending, sent, delivered, failed, bounced]
+        reference_id:
+          type: string
+          format: uuid
+          nullable: true
+        reference_type:
+          type: string
+          nullable: true
+          example: order
+        retry_count:
+          type: integer
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        failed_at:
+          type: string
+          format: date-time
+          nullable: true

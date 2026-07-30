@@ -1,0 +1,330 @@
+openapi: 3.0.3
+info:
+  title: Payment Service API
+  description: >
+    Payment processing on top of an event-sourced payment aggregate: every state change is
+    appended to payment_events and the endpoints below read either the aggregate directly or
+    the payment_status projection built from it (see docs/architecture/event-sourcing.md).
+    There is no external payment processor; charges are approved or declined deterministically
+    by a stub gateway, see the main README.
+  version: "1.0.0"
+  license:
+    name: MIT
+    url: https://github.com/Kalaganov-Konstantin/eventflow-commerce/blob/main/LICENSE
+servers:
+  - url: http://localhost:8080
+    description: Through the API Gateway (local docker compose stack)
+  - url: http://localhost:8082
+    description: Directly against the payment service
+tags:
+  - name: payments
+    description: Charging, refunding and reading back payments and their event history
+paths:
+  /api/v1/payments:
+    post:
+      operationId: processPayment
+      tags: [payments]
+      summary: Charge an order
+      description: >
+        A repeated call for an order that already has a payment returns the existing payment
+        instead of charging again, so a redelivered order.ready_for_payment event cannot double
+        charge.
+      security:
+        - CustomerHeader: []
+      parameters:
+        - $ref: "#/components/parameters/XUserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProcessPaymentRequest"
+      responses:
+        "201":
+          description: Payment recorded (approved or declined)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          description: The gateway declined the charge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppError"
+    get:
+      operationId: listPayments
+      tags: [payments]
+      summary: List the payments recorded for an order
+      description: Not scoped to a customer; the handler does not check X-User-ID.
+      security: []
+      parameters:
+        - name: order_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Payments recorded for the order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPaymentsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/payments/{id}:
+    get:
+      operationId: getPayment
+      tags: [payments]
+      summary: Get a payment's current status
+      description: Not scoped to a customer; the handler does not check X-User-ID.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: The payment's current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/payments/{id}/refund:
+    post:
+      operationId: refundPayment
+      tags: [payments]
+      summary: Refund a completed payment
+      description: Not scoped to a customer; the handler does not check X-User-ID.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefundPaymentRequest"
+      responses:
+        "200":
+          description: Payment refunded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The payment is not currently completed, so it cannot be refunded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppError"
+  /api/v1/payments/{id}/events:
+    get:
+      operationId: listPaymentEvents
+      tags: [payments]
+      summary: Get a payment's full recorded event history
+      description: >
+        Returns every event appended to the payment aggregate, for audit purposes. Not scoped to
+        a customer; the handler does not check X-User-ID.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: The payment's event history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListPaymentEventsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  securitySchemes:
+    CustomerHeader:
+      type: apiKey
+      in: header
+      name: X-User-ID
+      description: >
+        Customer id, set by the API Gateway from the caller's validated JWT. A client calling the
+        payment service directly must set it itself; there is no bearer token check at this layer.
+  parameters:
+    XUserID:
+      name: X-User-ID
+      in: header
+      required: true
+      description: Customer id, set by the API Gateway from the validated JWT
+      schema:
+        type: string
+        format: uuid
+    PaymentID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Malformed request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AppError"
+    Unauthorized:
+      description: Missing or malformed X-User-ID header
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AppError"
+    NotFound:
+      description: Payment not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AppError"
+  schemas:
+    AppError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: PAYMENT_FAILED
+        message:
+          type: string
+        details:
+          type: string
+    ProcessPaymentRequest:
+      type: object
+      required: [order_id, amount_cents]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+          format: int64
+          description: Amount to charge, in minor currency units (cents)
+        currency:
+          type: string
+          description: ISO 4217 currency code; defaults to USD when omitted
+          default: USD
+    RefundPaymentRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          default: customer_request
+    Payment:
+      type: object
+      required: [id, order_id, customer_id, amount_cents, currency, status, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          $ref: "#/components/schemas/PaymentStatusValue"
+        version:
+          type: integer
+    PaymentStatusValue:
+      type: string
+      enum:
+        - initiated
+        - completed
+        - failed
+        - refunded
+        - cancelled
+    PaymentStatus:
+      type: object
+      required:
+        - id
+        - order_id
+        - customer_id
+        - amount_cents
+        - currency
+        - status
+        - created_at
+        - updated_at
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        amount_cents:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          $ref: "#/components/schemas/PaymentStatusValue"
+        transaction_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        version:
+          type: integer
+    ListPaymentsResponse:
+      type: object
+      required: [payments]
+      properties:
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentStatus"
+    PaymentEvent:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          type: string
+          example: payment.processed
+        data:
+          type: object
+          description: The event's recorded payload, shaped differently per event type
+    ListPaymentEventsResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentEvent"
