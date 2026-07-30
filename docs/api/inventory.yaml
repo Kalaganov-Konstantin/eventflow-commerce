@@ -1,0 +1,308 @@
+openapi: 3.0.3
+info:
+  title: Inventory Service API
+  description: >
+    Product catalog and stock reservations. Product reads go through a cache-aside Redis
+    layer; if the database read fails after a cache miss, the service falls back to the last
+    known value it cached and marks the response with an X-Cache: stale header instead of
+    failing the request (see docs/architecture/resilience.md). None of these endpoints check a
+    customer identity: the API Gateway still requires a valid JWT to reach them, but the
+    inventory service itself does not read X-User-ID.
+  version: "1.0.0"
+  license:
+    name: MIT
+    url: https://github.com/Kalaganov-Konstantin/eventflow-commerce/blob/main/LICENSE
+servers:
+  - url: http://localhost:8080
+    description: Through the API Gateway (local docker compose stack)
+  - url: http://localhost:8083
+    description: Directly against the inventory service
+security: []
+tags:
+  - name: products
+    description: Product catalog reads
+  - name: inventory
+    description: Stock counters and reservations
+paths:
+  /api/v1/products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List products in the catalog
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: active_only
+          in: query
+          required: false
+          description: When true, only products with is_active = true are returned
+          schema:
+            type: boolean
+            default: false
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of products
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProductsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/products/{id}:
+    get:
+      operationId: getProduct
+      tags: [products]
+      summary: Get a single product
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            The product. Carries an X-Cache: stale response header when served from the
+            fallback cache entry after a database failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Product not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppError"
+  /api/v1/inventory/{product_id}:
+    get:
+      operationId: getInventory
+      tags: [inventory]
+      summary: Get a product's stock counters
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current stock counters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Inventory"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Product not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppError"
+  /api/v1/inventory/reservations:
+    post:
+      operationId: reserveInventory
+      tags: [inventory]
+      summary: Reserve stock for an order
+      description: >
+        Reserves every item in one transaction; a shortage on any item rolls back the whole
+        reservation and answers 409. Called synchronously by the order service before an order
+        is accepted, and by nothing else.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveRequest"
+      responses:
+        "201":
+          description: Stock reserved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReserveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Insufficient stock for one or more items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppError"
+  /api/v1/inventory/reservations/{order_id}:
+    delete:
+      operationId: releaseInventory
+      tags: [inventory]
+      summary: Release every reservation held for an order
+      description: >
+        Releasing an order with no active reservation is not an error, so this call is safe to
+        retry.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Reservations released
+        "400":
+          $ref: "#/components/responses/BadRequest"
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 100
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  responses:
+    BadRequest:
+      description: Malformed request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AppError"
+  schemas:
+    AppError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: INSUFFICIENT_INVENTORY
+        message:
+          type: string
+        details:
+          type: string
+    Product:
+      type: object
+      required:
+        - id
+        - name
+        - sku
+        - price_cents
+        - currency
+        - is_active
+        - created_at
+        - updated_at
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        sku:
+          type: string
+        category:
+          type: string
+        brand:
+          type: string
+        price_cents:
+          type: integer
+          format: int64
+        cost_cents:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+    ListProductsResponse:
+      type: object
+      required: [products, limit, offset]
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        limit:
+          type: integer
+        offset:
+          type: integer
+    Inventory:
+      type: object
+      required: [product_id, quantity_available, quantity_reserved]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity_available:
+          type: integer
+        quantity_reserved:
+          type: integer
+    ReserveItemRequest:
+      type: object
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+    ReserveRequest:
+      type: object
+      required: [order_id, items]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReserveItemRequest"
+    ReservedItem:
+      type: object
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+    ReserveResponse:
+      type: object
+      required: [order_id, items]
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReservedItem"

@@ -22,14 +22,29 @@ skills required to build robust, enterprise-grade applications.
 
 ## 🚀 Key Features
 
-- **Event-Driven Architecture** with Apache Kafka for maximum decoupling and scalability.
-- **Saga Pattern** for maintaining data consistency across distributed transactions.
-- **Event Sourcing & CQRS** for a fully auditable and high-performance payment service.
-- **Advanced CI/CD** with automated **Canary Releases** using Istio for zero-downtime deployments.
-- **Comprehensive Observability** with the "three pillars": metrics (Prometheus), logs (ELK), and traces (Jaeger).
-- **Resilient by Design** with built-in Circuit Breakers and Fallback mechanisms.
+- **Event-Driven Architecture** with Apache Kafka: every domain event goes through a transactional
+  outbox, so a state change and the event announcing it always commit together.
+- **Saga Pattern**: order creation reserves stock synchronously, then hands off to a choreography
+  over Kafka between order, payment and inventory, with a saga state machine driving compensation
+  when a later step fails.
+- **Event Sourcing & CQRS** in the payment service: every payment is an append only event stream
+  with a read model projected for queries.
+- **Canary Releases** on the API Gateway, staged through Istio traffic weights with automated
+  rollback on an error rate breach (`scripts/canary.sh`); the other services route through a single
+  stable subset for now.
+- **Observability** with the "three pillars": metrics (Prometheus/Grafana), traces (OTLP to Jaeger),
+  and logs (ELK, opt-in behind the `logging` Compose profile, see `make logging-up`).
+- **Resilient by Design** with circuit breakers guarding calls from the API Gateway to each backend
+  and from the payment service to its (stub) gateway, failing fast instead of hanging when a
+  dependency is unhealthy.
 - **Polyglot Persistence** using the best database for the job (PostgreSQL, Redis).
-- **Secure by Default** with automatic mTLS encryption for all internal traffic provided by Istio.
+- **mTLS between services** when deployed on the Istio-enabled Kubernetes manifests in
+  `infrastructure/`; the local Docker Compose stack does not run a mesh.
+
+The payment gateway and SMS delivery have no real external provider behind them: the payment
+gateway is a deterministic stub (approves or declines based on the amount) and the SMS sender only
+logs and marks the notification sent. Email notifications do send through a real SMTP client, given
+working `SMTP_*` credentials.
 
 ## 🛠️ Technology Stack
 
@@ -45,6 +60,9 @@ skills required to build robust, enterprise-grade applications.
 
 ## ⚡ Quick Start
 
+Prerequisites: Docker with the Compose plugin (or standalone `docker-compose`), Go 1.25+, Python
+with [uv](https://docs.astral.sh/uv/), and `jq` (the Makefile uses it to iterate the Go workspace).
+
 ```bash
 # Clone and run
 git clone https://github.com/Kalaganov-Konstantin/eventflow-commerce
@@ -53,8 +71,15 @@ make demo
 
 # Access services
 # API Gateway: http://localhost:8080
-# Grafana: http://localhost:3000
-# Jaeger: http://localhost:16686
+# Grafana:     http://localhost:3000 (admin/admin)
+# Prometheus:  http://localhost:9090
+# Jaeger UI:   http://localhost:16686
+# Kafka UI:    http://localhost:8090
+# Alertmanager: http://localhost:9093
+
+# Kibana needs the logging profile, which make demo does not start by default:
+# make logging-up
+# Kibana:      http://localhost:5601
 ```
 
 ## 🏗️ Architecture
@@ -125,4 +150,4 @@ Contributions are welcome! Please see our **[Contributing Guide](./CONTRIBUTING.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+This project is licensed under the MIT License: see the [LICENSE](./LICENSE) file for details.
