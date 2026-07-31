@@ -7,6 +7,7 @@ import (
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/alicebob/miniredis/v2/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
@@ -24,6 +25,27 @@ func newTestCache(t *testing.T) *Cache {
 	t.Cleanup(func() { _ = client.Close() })
 
 	return New(&database.RedisClient{Client: client}, time.Minute)
+}
+
+func TestCache_New_UsesDefaultTTLWhenNonPositive(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	c := New(&database.RedisClient{Client: client}, 0)
+	ctx := context.Background()
+
+	if err := c.SetJSON(ctx, "key", sampleValue{Name: "widget"}, 0); err != nil {
+		t.Fatalf("SetJSON() error = %v", err)
+	}
+
+	ttl, err := c.client.TTL(ctx, "key").Result()
+	if err != nil {
+		t.Fatalf("TTL() error = %v", err)
+	}
+	if ttl <= 0 || ttl > DefaultTTL {
+		t.Errorf("TTL() = %v, want in (0, %v]", ttl, DefaultTTL)
+	}
 }
 
 func TestCache_GetJSON_Miss(t *testing.T) {
@@ -61,6 +83,33 @@ func TestCache_SetJSON_GetJSON_Hit(t *testing.T) {
 	}
 }
 
+func TestCache_GetJSON_ReturnsErrorOnConnectionFailure(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	c := New(&database.RedisClient{Client: client}, time.Minute)
+	mr.Close()
+
+	var dest sampleValue
+	if _, err := c.GetJSON(context.Background(), "key", &dest); err == nil {
+		t.Fatal("GetJSON() error = nil, want error once the server is gone")
+	}
+}
+
+func TestCache_GetJSON_ReturnsErrorOnMalformedStoredValue(t *testing.T) {
+	c := newTestCache(t)
+	ctx := context.Background()
+
+	if err := c.client.Set(ctx, "key", "not-json", time.Minute).Err(); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
+	var dest sampleValue
+	if _, err := c.GetJSON(ctx, "key", &dest); err == nil {
+		t.Fatal("GetJSON() error = nil, want unmarshal error for a non-JSON stored value")
+	}
+}
+
 func TestCache_SetJSON_UsesDefaultTTL(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
@@ -75,6 +124,26 @@ func TestCache_SetJSON_UsesDefaultTTL(t *testing.T) {
 	}
 	if ttl <= 0 || ttl > time.Minute {
 		t.Errorf("TTL() = %v, want in (0, %v]", ttl, time.Minute)
+	}
+}
+
+func TestCache_SetJSON_ReturnsErrorWhenValueNotMarshalable(t *testing.T) {
+	c := newTestCache(t)
+
+	if err := c.SetJSON(context.Background(), "key", make(chan int), time.Minute); err == nil {
+		t.Fatal("SetJSON() error = nil, want marshal error for an unmarshalable value")
+	}
+}
+
+func TestCache_SetJSON_ReturnsErrorOnConnectionFailure(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	c := New(&database.RedisClient{Client: client}, time.Minute)
+	mr.Close()
+
+	if err := c.SetJSON(context.Background(), "key", sampleValue{Name: "widget"}, time.Minute); err == nil {
+		t.Fatal("SetJSON() error = nil, want error once the server is gone")
 	}
 }
 
@@ -104,6 +173,18 @@ func TestCache_Delete_NoKeys(t *testing.T) {
 
 	if err := c.Delete(context.Background()); err != nil {
 		t.Fatalf("Delete() error = %v, want nil", err)
+	}
+}
+
+func TestCache_Delete_ReturnsErrorOnConnectionFailure(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	c := New(&database.RedisClient{Client: client}, time.Minute)
+	mr.Close()
+
+	if err := c.Delete(context.Background(), "key"); err == nil {
+		t.Fatal("Delete() error = nil, want error once the server is gone")
 	}
 }
 
@@ -166,5 +247,43 @@ func TestCache_DeleteByPrefix(t *testing.T) {
 		if hit != want {
 			t.Errorf("GetJSON(%s) hit = %v, want %v", key, hit, want)
 		}
+	}
+}
+
+func TestCache_DeleteByPrefix_ReturnsErrorOnScanFailure(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	c := New(&database.RedisClient{Client: client}, time.Minute)
+	mr.Close()
+
+	if err := c.DeleteByPrefix(context.Background(), "product:"); err == nil {
+		t.Fatal("DeleteByPrefix() error = nil, want error once the server is gone")
+	}
+}
+
+func TestCache_DeleteByPrefix_ReturnsErrorWhenDeleteFails(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	c := New(&database.RedisClient{Client: client}, time.Minute)
+	ctx := context.Background()
+
+	if err := c.SetJSON(ctx, "product:1", sampleValue{Name: "widget"}, time.Minute); err != nil {
+		t.Fatalf("SetJSON() error = %v", err)
+	}
+
+	// Let SCAN through untouched but fail every DEL, so the scan succeeds and only the
+	// subsequent delete call surfaces an error.
+	mr.Server().SetPreHook(func(peer *server.Peer, cmd string, _ ...string) bool {
+		if cmd == "DEL" {
+			peer.WriteError("simulated delete failure")
+			return true
+		}
+		return false
+	})
+
+	if err := c.DeleteByPrefix(ctx, "product:"); err == nil {
+		t.Fatal("DeleteByPrefix() error = nil, want error when the delete call fails")
 	}
 }

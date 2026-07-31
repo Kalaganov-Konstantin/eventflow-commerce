@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestNew_EnvPrefixAndKeyReplacer(t *testing.T) {
 	t.Setenv("ORDER_SERVER_PORT", "9090")
@@ -36,6 +40,43 @@ func TestLoad_UnmarshalsDefaults(t *testing.T) {
 	}
 	if cfg.Server.Port != "8080" {
 		t.Errorf("cfg.Server.Port = %q, want %q", cfg.Server.Port, "8080")
+	}
+}
+
+func TestLoad_ReturnsErrorForMalformedConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("not: [valid: yaml"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	loader := New("malformed_config_service")
+	var cfg struct{}
+	if err := loader.Load(&cfg); err == nil {
+		t.Fatal("Load() error = nil, want error for a malformed config file")
+	}
+}
+
+func TestLoad_ReturnsErrorWhenValueDoesNotMatchTargetType(t *testing.T) {
+	loader := New("bad_type_service")
+	loader.SetDefault("server.port", "not-a-number")
+
+	var cfg struct {
+		Server struct {
+			Port int `mapstructure:"port"`
+		} `mapstructure:"server"`
+	}
+
+	if err := loader.Load(&cfg); err == nil {
+		t.Fatal("Load() error = nil, want error when the value cannot decode into the target type")
 	}
 }
 

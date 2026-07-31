@@ -70,6 +70,40 @@ func TestTraceContext_ExtractWithoutHeadersReturnsUnchangedContext(t *testing.T)
 	}
 }
 
+func TestKafkaHeaderCarrier_Set_UpdatesExistingKeyInPlace(t *testing.T) {
+	headers := []kafka.Header{{Key: "traceparent", Value: []byte("old")}}
+	carrier := kafkaHeaderCarrier{headers: &headers}
+
+	carrier.Set("traceparent", "new")
+
+	if len(headers) != 1 {
+		t.Fatalf("headers = %#v, want a single updated header, not an appended one", headers)
+	}
+	if got := string(headers[0].Value); got != "new" {
+		t.Errorf("traceparent = %q, want %q", got, "new")
+	}
+}
+
+func TestKafkaHeaderCarrier_Keys(t *testing.T) {
+	headers := []kafka.Header{
+		{Key: "traceparent", Value: []byte("00-abc-def-01")},
+		{Key: "correlationId", Value: []byte("corr-1")},
+	}
+	carrier := kafkaHeaderCarrier{headers: &headers}
+
+	keys := carrier.Keys()
+
+	want := []string{"traceparent", "correlationId"}
+	if len(keys) != len(want) {
+		t.Fatalf("Keys() = %#v, want %#v", keys, want)
+	}
+	for i, k := range want {
+		if keys[i] != k {
+			t.Errorf("Keys()[%d] = %q, want %q", i, keys[i], k)
+		}
+	}
+}
+
 func TestStartProducerAndConsumerSpan_LinkAsParentAndChild(t *testing.T) {
 	producerCtx, producerSpan := startProducerSpan(context.Background(), OrdersTopic)
 	defer producerSpan.End()

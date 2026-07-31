@@ -109,6 +109,54 @@ func TestProcessedStore_MarkProcessed_WrapsExecError(t *testing.T) {
 	}
 }
 
+func TestProcessedStore_MarkProcessed_WrapsRowsAffectedError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+		WithArgs("evt-1", "order.created").
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected unavailable")))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+
+	store := NewProcessedStore(db)
+	if _, err := store.MarkProcessed(context.Background(), tx, "evt-1", "order.created"); err == nil {
+		t.Fatal("MarkProcessed() error = nil, want error when RowsAffected fails")
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("tx.Rollback() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestProcessedStore_WasProcessed_WrapsScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WithArgs("evt-1").
+		WillReturnError(errors.New("query failed"))
+
+	store := NewProcessedStore(db)
+	if _, err := store.WasProcessed(context.Background(), "evt-1"); err == nil {
+		t.Fatal("WasProcessed() error = nil, want error")
+	}
+}
+
 func TestProcessedStore_WasProcessed(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -139,6 +187,32 @@ func TestProcessedStore_WasProcessed(t *testing.T) {
 				t.Errorf("WasProcessed() = %v, want %v", got, tt.exists)
 			}
 		})
+	}
+}
+
+func TestIdempotent_ReturnsErrorWhenWasProcessedFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS")).
+		WithArgs("evt-1").
+		WillReturnError(errors.New("query failed"))
+
+	store := NewProcessedStore(db)
+	called := false
+	handler := Idempotent(store, func(Event) error {
+		called = true
+		return nil
+	})
+
+	if err := handler(Event{ID: "evt-1"}); err == nil {
+		t.Fatal("handler() error = nil, want error when the idempotency check fails")
+	}
+	if called {
+		t.Error("handler was called even though the idempotency check failed")
 	}
 }
 
