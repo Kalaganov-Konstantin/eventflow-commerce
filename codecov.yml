@@ -58,6 +58,10 @@ ignore:
   - "**/*_test.go"
   - "**/test_*.py"
   - "**/tests/**"
+  # Process wiring: exercised by the integration and e2e suites, not by unit tests
+  - "**/cmd/server/main.go"
+  # Helpers for the integration suites, test code without a _test.go suffix
+  - "services/*/test/**"
   - "**/__pycache__/**"
   - "**/vendor/**"
   - "**/node_modules/**"
