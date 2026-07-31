@@ -100,7 +100,9 @@ func NewSubscriber(config KafkaConfig, topic string, logger *zap.Logger) *Subscr
 		StartOffset: kafka.LastOffset,
 	})
 
-	var dlqWriter *kafka.Writer
+	// Typed as the interface on purpose: a nil *kafka.Writer in this field would still read as a
+	// non nil kafkaWriter and make Close panic when no DLQ topic is configured.
+	var dlqWriter kafkaWriter
 	if config.DLQTopic != "" {
 		dlqWriter = &kafka.Writer{
 			Addr:     kafka.TCP(config.Brokers...),

@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"io"
 	"regexp"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/events"
 )
@@ -67,6 +69,226 @@ func TestRelay_RelayBatch_PublishesPendingMessageAndMarksItPublished(t *testing.
 	}
 	if got := pub.published[0].Data["total_cents"]; got != float64(1999) {
 		t.Errorf("payload total_cents = %v, want 1999", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_ReturnsSelectPendingError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnError(errors.New("select failed"))
+	mock.ExpectRollback()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err == nil {
+		t.Fatal("RelayBatch() error = nil, want error when selecting pending messages fails")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_ReturnsScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	// A NULL id cannot scan into the non-nullable string field, so Scan itself fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns).
+			AddRow(nil, "orders.events", "order.created", "order-1", []byte(`{}`), nil))
+	mock.ExpectRollback()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err == nil {
+		t.Fatal("RelayBatch() error = nil, want error when a row fails to scan")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_ReturnsRowsIterationError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns).
+			AddRow("msg-1", "orders.events", "order.created", "order-1", []byte(`{}`), nil).
+			RowError(0, errors.New("row iteration failed")))
+	mock.ExpectRollback()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err == nil {
+		t.Fatal("RelayBatch() error = nil, want error when iterating rows fails")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_MarksFailedWhenPayloadUnmarshalFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns).
+			AddRow("msg-1", "orders.events", "order.created", "order-1", []byte(`not json`), nil))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE outbox_messages SET attempts = attempts + 1")).
+		WithArgs("msg-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v", err)
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("published = %d events, want 0 for a message with an unparsable payload", len(pub.published))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_ReturnsCommitError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns))
+	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err == nil {
+		t.Fatal("RelayBatch() error = nil, want error when the commit fails")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_LogsWhenMarkPublishedExecFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns).
+			AddRow("msg-1", "orders.events", "order.created", "order-1", []byte(`{}`), nil))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE outbox_messages SET published_at")).
+		WithArgs("msg-1").
+		WillReturnError(errors.New("update failed"))
+	mock.ExpectCommit()
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v, want nil since a failed mark-published is only logged", err)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published = %d events, want 1", len(pub.published))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_LogsWhenMarkFailedExecFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns).
+			AddRow("msg-1", "orders.events", "order.created", "order-1", []byte(`{}`), nil))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE outbox_messages SET attempts = attempts + 1")).
+		WithArgs("msg-1", "kafka unreachable").
+		WillReturnError(errors.New("update failed"))
+	mock.ExpectCommit()
+
+	pub := &fakePublisher{err: errors.New("kafka unreachable")}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v, want nil since a failed mark-failed update is only logged", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestRelay_RelayBatch_LogsWhenPendingCountQueryFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, topic, event_type, aggregate_id, payload, correlation_id")).
+		WithArgs(10).
+		WillReturnRows(sqlmock.NewRows(pendingColumns))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM outbox_messages WHERE published_at IS NULL")).
+		WillReturnError(errors.New("count failed"))
+
+	registry := prometheus.NewRegistry()
+	m := events.NewKafkaMetrics(registry)
+
+	pub := &fakePublisher{}
+	relay := &Relay{db: db, pub: pub, logger: zap.NewNop(), batchSize: 10}
+	relay.SetMetrics(m)
+
+	if err := relay.RelayBatch(context.Background()); err != nil {
+		t.Fatalf("RelayBatch() error = %v, want nil since a failed pending count is only logged", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -219,5 +441,47 @@ func TestRelay_StartAndStop_RunsAndExitsCleanly(t *testing.T) {
 	relay.pub = pub
 
 	relay.Start(context.Background())
+	relay.Stop()
+}
+
+func TestRelay_Start_ExitsWhenContextCancelled(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	relay := NewRelay(db, nil, zap.NewNop(), time.Hour, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	relay.Start(ctx)
+	cancel()
+	<-relay.done
+}
+
+func TestRelay_Start_LogsWhenTickerFiresAndRelayBatchFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin().WillReturnError(errors.New("begin failed"))
+
+	logged := make(chan struct{}, 1)
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(io.Discard), zapcore.ErrorLevel)
+	logger := zap.New(core, zap.Hooks(func(zapcore.Entry) error {
+		select {
+		case logged <- struct{}{}:
+		default:
+		}
+		return nil
+	}))
+
+	relay := NewRelay(db, nil, logger, time.Millisecond, 10)
+	relay.pub = &fakePublisher{}
+
+	relay.Start(context.Background())
+	<-logged
 	relay.Stop()
 }

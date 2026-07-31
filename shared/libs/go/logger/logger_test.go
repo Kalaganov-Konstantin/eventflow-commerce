@@ -2,8 +2,10 @@ package logger
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -51,6 +53,17 @@ func TestNew_InvalidLevelDefaultsToInfo(t *testing.T) {
 	}
 	if !l.Core().Enabled(zapcore.InfoLevel) {
 		t.Error("info level should be enabled as the fallback")
+	}
+}
+
+func TestNew_ReturnsErrorForInvalidOutputPath(t *testing.T) {
+	_, err := New(Config{
+		Level:       "info",
+		Environment: "development",
+		OutputPaths: []string{"/nonexistent/definitely-not-a-real-path/out.log"},
+	})
+	if err == nil {
+		t.Fatal("New() error = nil, want error for an unwritable output path")
 	}
 }
 
@@ -115,5 +128,74 @@ func TestWithTracing_NoActiveSpan(t *testing.T) {
 	}
 	if _, ok := fields["span_id"]; ok {
 		t.Error("span_id should not be set without an active span")
+	}
+}
+
+func TestWithTracing_ActiveSpan(t *testing.T) {
+	l, logs := newObservedLogger()
+
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	if err != nil {
+		t.Fatalf("TraceIDFromHex() error = %v", err)
+	}
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	if err != nil {
+		t.Fatalf("SpanIDFromHex() error = %v", err)
+	}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID})
+	ctx := trace.ContextWithSpanContext(context.Background(), sc)
+
+	l.WithTracing(ctx).Info("event")
+
+	if got := fieldValue(t, logs, "trace_id"); got != traceID.String() {
+		t.Errorf("trace_id = %v, want %v", got, traceID.String())
+	}
+	if got := fieldValue(t, logs, "span_id"); got != spanID.String() {
+		t.Errorf("span_id = %v, want %v", got, spanID.String())
+	}
+}
+
+func TestSugar_ReturnsSugaredLoggerForSameCore(t *testing.T) {
+	l, logs := newObservedLogger()
+
+	l.Sugar().Infow("event", "key", "value")
+
+	if got := fieldValue(t, logs, "key"); got != "value" {
+		t.Errorf("key = %v, want %v", got, "value")
+	}
+}
+
+func TestSync_FlushesUnderlyingLogger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	l, err := New(Config{Level: "info", Environment: "development", OutputPaths: []string{path}})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	l.Info("event")
+
+	if err := l.Sync(); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Environment != "development" {
+		t.Errorf("Environment = %q, want %q", cfg.Environment, "development")
+	}
+	if cfg.Level != "info" {
+		t.Errorf("Level = %q, want %q", cfg.Level, "info")
+	}
+}
+
+func TestDefaultProductionConfig(t *testing.T) {
+	cfg := DefaultProductionConfig()
+
+	if cfg.Environment != "production" {
+		t.Errorf("Environment = %q, want %q", cfg.Environment, "production")
+	}
+	if cfg.Level != "info" {
+		t.Errorf("Level = %q, want %q", cfg.Level, "info")
 	}
 }
