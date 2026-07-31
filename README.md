@@ -2,13 +2,10 @@
 
 [![CI/CD](https://github.com/Kalaganov-Konstantin/eventflow-commerce/actions/workflows/main.yml/badge.svg)](https://github.com/Kalaganov-Konstantin/eventflow-commerce/actions/workflows/main.yml)
 [![codecov](https://codecov.io/gh/Kalaganov-Konstantin/eventflow-commerce/branch/main/graph/badge.svg)](https://codecov.io/gh/Kalaganov-Konstantin/eventflow-commerce)
-
-**Go Report Cards:**
-[![API Gateway](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway)
-[![Order Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/order)
-[![Payment Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/payment)
-[![Inventory Service](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory)
-[![Shared Libs](https://goreportcard.com/badge/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go)](https://goreportcard.com/report/github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://golang.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-Istio-326CE5?logo=kubernetes&logoColor=white)](./infrastructure/k8s)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 ## ✨ Project Overview
 
