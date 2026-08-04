@@ -4,6 +4,11 @@
 # binary; Docker Desktop's shim provides both locally, which is why this went unnoticed until CI.
 COMPOSE := $(shell command -v docker-compose >/dev/null 2>&1 && echo docker-compose || echo docker compose)
 
+# k6 drives the whole scenario from a single address, so the demo default of 100 requests per
+# minute per client IP rejects most of the load before it reaches a service. The performance run
+# raises the gateway limit for its own stack instead of weakening the default everywhere.
+PERFORMANCE_RATE_LIMIT_RPM ?= 10000
+
 .PHONY: help
 help: ## ✨ Show this help message
 	@echo 'Usage: make [target]'
@@ -228,7 +233,7 @@ test-e2e: ## 🧪 Run the end to end order flow test against a full demo stack
 
 .PHONY: test-performance
 test-performance: ## 🚀 Run the k6 order flow scenario against a full demo stack
-	@$(MAKE) demo
+	@API_GATEWAY_RATE_LIMIT_RPM=$(PERFORMANCE_RATE_LIMIT_RPM) $(MAKE) demo
 	@echo "--> Seeding a product for the performance scenario..."
 	@PRODUCT_ID=$$(uuidgen | tr 'A-Z' 'a-z'); \
 	$(COMPOSE) exec -T postgres psql -U inventory_user -d inventory -v ON_ERROR_STOP=1 -q -c \
