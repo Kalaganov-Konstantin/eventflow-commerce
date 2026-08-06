@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -916,6 +918,223 @@ func TestProxyToService_CircuitBreakerSkipsBackendWhileOpen(t *testing.T) {
 	}
 	if calls := atomic.LoadInt32(&calls); calls != 1 {
 		t.Errorf("calls to backend after second request = %d, want still 1 (breaker should skip the backend)", calls)
+	}
+}
+
+func TestHealthCheck_EncodeErrorFallsBackToPlainText(t *testing.T) {
+	cfg := &config.Config{}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	w := &failingResponseWriter{}
+	req := httptest.NewRequest("GET", "/health", nil)
+
+	router.healthCheck(w, req)
+
+	if len(w.statusCodes) != 2 || w.statusCodes[0] != http.StatusOK || w.statusCodes[1] != http.StatusInternalServerError {
+		t.Errorf("Expected status codes [200 500] (health body, then encode-failure fallback), got %v", w.statusCodes)
+	}
+}
+
+func TestLivenessCheck_EncodeErrorHasNoPlainTextFallback(t *testing.T) {
+	cfg := &config.Config{}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	w := &failingResponseWriter{}
+	req := httptest.NewRequest("GET", "/health/live", nil)
+
+	router.livenessCheck(w, req)
+
+	if len(w.statusCodes) != 1 || w.statusCodes[0] != http.StatusOK {
+		t.Errorf("Expected only the initial 200 write (liveness only logs encode failures), got %v", w.statusCodes)
+	}
+}
+
+func TestReadinessCheck_EncodeErrorsForBothOutcomes(t *testing.T) {
+	// Start and immediately close a server to get an address that reliably refuses connections.
+	down := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	downURL := down.URL
+	down.Close()
+
+	logger, _ := zap.NewDevelopment()
+
+	notReadyCfg := &config.Config{
+		OrderServiceURL:        downURL,
+		PaymentServiceURL:      downURL,
+		InventoryServiceURL:    downURL,
+		NotificationServiceURL: downURL,
+	}
+	notReadyRouter := newTestRouter(t, notReadyCfg, logger, time.Now())
+
+	wNotReady := &failingResponseWriter{}
+	req := httptest.NewRequest("GET", "/health/ready", nil)
+	notReadyRouter.readinessCheck(wNotReady, req)
+
+	if len(wNotReady.statusCodes) != 1 || wNotReady.statusCodes[0] != http.StatusServiceUnavailable {
+		t.Errorf("Expected only the 503 write (readiness only logs encode failures), got %v", wNotReady.statusCodes)
+	}
+
+	healthy := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			rw.WriteHeader(http.StatusOK)
+			return
+		}
+		rw.WriteHeader(http.StatusNotFound)
+	}))
+	defer healthy.Close()
+
+	readyCfg := &config.Config{
+		OrderServiceURL:        healthy.URL,
+		PaymentServiceURL:      healthy.URL,
+		InventoryServiceURL:    healthy.URL,
+		NotificationServiceURL: healthy.URL,
+	}
+	readyRouter := newTestRouter(t, readyCfg, logger, time.Now())
+
+	wReady := &failingResponseWriter{}
+	req2 := httptest.NewRequest("GET", "/health/ready", nil)
+	readyRouter.readinessCheck(wReady, req2)
+
+	if len(wReady.statusCodes) != 1 || wReady.statusCodes[0] != http.StatusOK {
+		t.Errorf("Expected only the 200 write (readiness only logs encode failures), got %v", wReady.statusCodes)
+	}
+}
+
+func TestBackendHealthy_UnknownBackendName(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	if router.backendHealthy(context.Background(), "unknown-backend") {
+		t.Error("Expected backendHealthy to return false for a name with no registered proxy")
+	}
+}
+
+func TestBackendHealthy_RequestConstructionFailure(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	// A Host containing a space cannot be re-parsed by NewRequestWithContext, even though this
+	// target was built directly rather than through url.Parse (which would have rejected it).
+	router.proxies[backendOrder] = &backendProxy{
+		name:   backendOrder,
+		target: &url.URL{Scheme: "http", Host: "exam ple.com"},
+	}
+
+	if router.backendHealthy(context.Background(), backendOrder) {
+		t.Error("Expected backendHealthy to return false when the health request cannot be constructed")
+	}
+}
+
+func TestGetClientIP_IPv6FallbackWhenSplitHostPortFails(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.RemoteAddr = "2001:db8::1:8080"
+
+	if ip := router.getClientIP(req); ip != "2001:db8::1" {
+		t.Errorf("Expected the manual colon-split fallback to recover the IPv6 host, got %q", ip)
+	}
+}
+
+func TestGetClientIP_UnknownWhenNothingParses(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+	req.RemoteAddr = "badformat"
+
+	if ip := router.getClientIP(req); ip != "unknown" {
+		t.Errorf("Expected 'unknown' when RemoteAddr has no parsable host or port, got %q", ip)
+	}
+}
+
+func TestRoutePath_CollapsesLongPaths(t *testing.T) {
+	testCases := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{"root path", "/", "/"},
+		{"short path", "/health", "/health"},
+		{"exactly three segments", "/api/v1/orders", "/api/v1/orders"},
+		{"drops sub-resources beyond three segments", "/api/v1/orders/123/items", "/api/v1/orders"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := routePath(tc.path); got != tc.expected {
+				t.Errorf("routePath(%q) = %q, want %q", tc.path, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSpanName_CombinesMethodAndRoute(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/orders/123", nil)
+
+	if got := SpanName(req); got != "GET /api/v1/orders" {
+		t.Errorf("SpanName(req) = %q, want %q", got, "GET /api/v1/orders")
+	}
+}
+
+func TestWriteCircuitOpenResponse_RecordsMetricsAndHasNoPlainTextFallback(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	metrics := NewTestMetrics()
+
+	router, err := NewRouter(cfg, logger, metrics, time.Now())
+	if err != nil {
+		t.Fatalf("NewRouter returned unexpected error: %v", err)
+	}
+
+	before := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+
+	w := &failingResponseWriter{}
+	router.writeCircuitOpenResponse(w, backendOrder)
+
+	after := testutil.ToFloat64(metrics.ProxyErrorsTotal.WithLabelValues(backendOrder, "SERVICE_UNAVAILABLE"))
+	if after != before+1 {
+		t.Errorf("Expected the circuit-open response to record a proxy error metric, got %v -> %v", before, after)
+	}
+
+	if len(w.statusCodes) != 1 || w.statusCodes[0] != http.StatusServiceUnavailable {
+		t.Errorf("Expected only the 503 write (circuit-open response only logs encode failures), got %v", w.statusCodes)
+	}
+}
+
+func TestNotFoundHandler_EncodeErrorFallsBackToPlainText(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	w := &failingResponseWriter{}
+	req := httptest.NewRequest("GET", "/api/v1/unknown", nil)
+
+	router.notFoundHandler(w, req)
+
+	if len(w.statusCodes) != 2 || w.statusCodes[0] != http.StatusNotFound || w.statusCodes[1] != http.StatusInternalServerError {
+		t.Errorf("Expected status codes [404 500] (not-found body, then encode-failure fallback), got %v", w.statusCodes)
+	}
+}
+
+func TestProxyErrorHandler_EncodeErrorFallsBackToPlainText(t *testing.T) {
+	cfg := &config.Config{OrderServiceURL: "http://order:8080"}
+	logger, _ := zap.NewDevelopment()
+	router := newTestRouter(t, cfg, logger, time.Now())
+
+	w := &failingResponseWriter{}
+	req := httptest.NewRequest("GET", "/api/v1/orders", nil)
+
+	router.proxyErrorHandler(w, req, fmt.Errorf("connection refused"), backendOrder)
+
+	if len(w.statusCodes) != 2 || w.statusCodes[0] != http.StatusServiceUnavailable || w.statusCodes[1] != http.StatusInternalServerError {
+		t.Errorf("Expected status codes [503 500] (proxy error body, then encode-failure fallback), got %v", w.statusCodes)
 	}
 }
 
