@@ -154,6 +154,371 @@ func TestValidate(t *testing.T) {
 			},
 			expectError: true,
 		},
+		// The cases above all fail before the server port check, so none of them reach the
+		// later validations. The cases below set every earlier field so validation runs deep
+		// enough to exercise the specific check under test.
+		{
+			name: "Redis URL missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: ""},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Kafka brokers missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: nil},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Jaeger endpoint missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: ""},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Order service URL missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Payment service URL missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Inventory service URL missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Notification service URL missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "JWT secret invalid propagates through full validation",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "short",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Order service URL fails format validation with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "not-a-valid-url",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Payment service URL fails format validation with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "not-a-valid-url",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Inventory service URL fails format validation with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "not-a-valid-url",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Notification service URL fails format validation with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "not-a-valid-url",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Rate limit invalid propagates through full validation",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: -1, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Circuit breaker invalid propagates through full validation",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+				CircuitBreaker:         CircuitBreakerConfig{FailureThreshold: -1},
+			},
+			expectError: true,
+		},
+		{
+			name: "Database host missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "", Port: "5432", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Database port missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "", User: "test", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Database user missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "", Password: "test", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Database password missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "", DBName: "test",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
+		{
+			name: "Database name missing with full config",
+			config: Config{
+				Server: sharedConfig.ServerConfig{Port: "8080"},
+				Redis:  sharedConfig.RedisConfig{URL: "redis://redis:6379"},
+				Kafka:  sharedConfig.KafkaConfig{Brokers: []string{"kafka:9092"}},
+				Jaeger: sharedConfig.JaegerConfig{Endpoint: "jaeger:14268"},
+				Database: sharedConfig.DatabaseConfig{
+					Host: "postgres", Port: "5432", User: "test", Password: "test", DBName: "",
+				},
+				JWTSecret:              "this-is-a-very-long-secret-key-for-jwt-validation",
+				OrderServiceURL:        "http://order:8080",
+				PaymentServiceURL:      "http://payment:8080",
+				InventoryServiceURL:    "http://inventory:8080",
+				NotificationServiceURL: "http://notification:8080",
+				RateLimit:              RateLimitConfig{RequestsPerMinute: 100, WindowDuration: 60},
+			},
+			expectError: true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -214,6 +579,22 @@ func TestRateLimitConfigValidate(t *testing.T) {
 			config: RateLimitConfig{
 				RequestsPerMinute: 100,
 				WindowDuration:    -1,
+			},
+			expectError: true,
+		},
+		{
+			name: "Requests per minute above maximum",
+			config: RateLimitConfig{
+				RequestsPerMinute: 10001,
+				WindowDuration:    60,
+			},
+			expectError: true,
+		},
+		{
+			name: "Window duration above maximum",
+			config: RateLimitConfig{
+				RequestsPerMinute: 100,
+				WindowDuration:    3601,
 			},
 			expectError: true,
 		},
@@ -314,8 +695,11 @@ func TestValidateServiceURL(t *testing.T) {
 			expectError: true,
 		},
 		{
+			// "service:8080" actually parses with Scheme="service" (opaque form), which
+			// exercises the host check below rather than the scheme check; a protocol-relative
+			// URL is what genuinely produces an empty Scheme with a non-empty Host.
 			name:        "URL without scheme",
-			serviceURL:  "service:8080",
+			serviceURL:  "//service:8080",
 			envName:     "SERVICE_URL",
 			expectError: true,
 		},
@@ -336,6 +720,51 @@ func TestValidateServiceURL(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := cfg.validateServiceURL(tc.serviceURL, tc.envName)
+
+			if tc.expectError && err == nil {
+				t.Error("Expected validation error, but got none")
+			}
+
+			if !tc.expectError && err != nil {
+				t.Errorf("Expected no validation error, but got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateJWTSecret(t *testing.T) {
+	testCases := []struct {
+		name        string
+		secret      string
+		expectError bool
+	}{
+		{
+			name:        "Valid secret",
+			secret:      "this-is-a-very-long-secret-key-for-jwt-validation",
+			expectError: false,
+		},
+		{
+			name:        "Empty secret",
+			secret:      "",
+			expectError: true,
+		},
+		{
+			name:        "Too short",
+			secret:      "short",
+			expectError: true,
+		},
+		{
+			// Long enough to pass the length check, so it reaches the weak-value blocklist.
+			name:        "Weak value from blocklist",
+			secret:      "CHANGE_ME_IN_PRODUCTION_GENERATE_WITH_openssl_rand_base64_32",
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{JWTSecret: tc.secret}
+			err := cfg.validateJWTSecret()
 
 			if tc.expectError && err == nil {
 				t.Error("Expected validation error, but got none")
@@ -521,5 +950,55 @@ func TestLoadConfig_InvalidEnvValues(t *testing.T) {
 	_, err := LoadConfig()
 	if err == nil {
 		t.Error("Expected LoadConfig to fail with invalid configuration values")
+	}
+}
+
+func TestLoadConfig_UnparsableDatabaseURL(t *testing.T) {
+	envVars := map[string]string{
+		"JWT_SECRET":                  "this-is-a-very-long-secret-key-for-jwt-validation",
+		"ORDER_SERVICE_URL":           "http://order:8080",
+		"PAYMENT_SERVICE_URL":         "http://payment:8080",
+		"INVENTORY_SERVICE_URL":       "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL":    "http://notification:8080",
+		"API_GATEWAY_SERVER_PORT":     "8080",
+		"REDIS_URL":                   "redis:6379",
+		"KAFKA_BROKERS":               "kafka:9092",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:14268",
+		// The invalid percent-escape makes url.Parse itself fail, rather than just
+		// producing an empty or invalid field.
+		"API_GATEWAY_DATABASE_URL": "postgres://%zz@postgres:5432/test",
+	}
+
+	for key, value := range envVars {
+		t.Setenv(key, value)
+	}
+
+	if _, err := LoadConfig(); err == nil {
+		t.Error("Expected LoadConfig to fail with an unparsable database URL")
+	}
+}
+
+func TestLoadConfig_WeakJWTSecretFailsValidation(t *testing.T) {
+	envVars := map[string]string{
+		// Long enough to pass the length check, so LoadConfig's call to cfg.Validate()
+		// fails on the weak-value blocklist instead, deeper in validation.
+		"JWT_SECRET":                  "CHANGE_ME_IN_PRODUCTION_GENERATE_WITH_openssl_rand_base64_32",
+		"ORDER_SERVICE_URL":           "http://order:8080",
+		"PAYMENT_SERVICE_URL":         "http://payment:8080",
+		"INVENTORY_SERVICE_URL":       "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL":    "http://notification:8080",
+		"API_GATEWAY_SERVER_PORT":     "8080",
+		"REDIS_URL":                   "redis:6379",
+		"KAFKA_BROKERS":               "kafka:9092",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:14268",
+		"API_GATEWAY_DATABASE_URL":    "postgres://test:test@postgres:5432/test?sslmode=disable",
+	}
+
+	for key, value := range envVars {
+		t.Setenv(key, value)
+	}
+
+	if _, err := LoadConfig(); err == nil {
+		t.Error("Expected LoadConfig to fail validation with a weak JWT secret")
 	}
 }
