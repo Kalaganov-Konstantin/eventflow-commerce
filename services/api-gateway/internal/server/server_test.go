@@ -495,3 +495,36 @@ func TestServer_RecoveryMiddlewareCatchesPanics(t *testing.T) {
 		t.Errorf("Expected status %d after panic recovery, got %d", http.StatusInternalServerError, w.Code)
 	}
 }
+
+func TestNewServer_ReturnsErrorWhenRouterConstructionFails(t *testing.T) {
+	cfg := &config.Config{
+		Server: sharedConfig.ServerConfig{
+			Host: "localhost",
+			Port: "8080",
+		},
+		JWTSecret:              "test-secret-key-for-jwt-validation-testing",
+		OrderServiceURL:        "http://%zz", // unparsable, so building its reverse proxy fails
+		PaymentServiceURL:      "http://payment:8080",
+		InventoryServiceURL:    "http://inventory:8080",
+		NotificationServiceURL: "http://notification:8080",
+		RateLimit: config.RateLimitConfig{
+			RequestsPerMinute: 100,
+			WindowDuration:    60,
+		},
+	}
+
+	logger := zaptest.NewLogger(t)
+
+	srv, err := NewServer(Options{
+		Config:  cfg,
+		Logger:  logger,
+		Metrics: testMetrics,
+	})
+
+	if err == nil {
+		t.Fatal("Expected NewServer to return an error when the router cannot be constructed")
+	}
+	if srv != nil {
+		t.Error("Expected a nil server when construction fails")
+	}
+}
