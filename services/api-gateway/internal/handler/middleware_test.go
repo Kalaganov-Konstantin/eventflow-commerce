@@ -2,7 +2,12 @@ package handler
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +16,28 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap/zaptest"
 )
+
+// failingResponseWriter implements http.ResponseWriter but fails on every Write call, used to
+// exercise JSON-encoding error branches that a normal httptest.ResponseRecorder never hits.
+type failingResponseWriter struct {
+	header      http.Header
+	statusCodes []int
+}
+
+func (w *failingResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *failingResponseWriter) Write([]byte) (int, error) {
+	return 0, errors.New("simulated write failure")
+}
+
+func (w *failingResponseWriter) WriteHeader(statusCode int) {
+	w.statusCodes = append(w.statusCodes, statusCode)
+}
 
 func TestNewRateLimiter(t *testing.T) {
 	rl := NewRateLimiter(10, time.Minute)
@@ -507,7 +534,13 @@ func TestJWTMiddleware_UnsupportedSigningMethod(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	middleware := JWTMiddleware(secret, logger, nil)
 
-	// Create a token with RSA algorithm (unsupported)
+	// A token genuinely signed with a non-HMAC algorithm, so the keyfunc's signing-method
+	// check itself rejects it, rather than failing to parse before that check ever runs.
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate ECDSA key: %v", err)
+	}
+
 	claims := &Claims{
 		UserID: "user123",
 		Email:  "test@example.com",
@@ -515,8 +548,11 @@ func TestJWTMiddleware_UnsupportedSigningMethod(t *testing.T) {
 	}
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
 
-	// Create a malformed token with RSA256 header that will trigger the signing method check
-	tokenString := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNlcjEyMyIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInJvbGUiOiJ1c2VyIiwiZXhwIjoxNjQwOTk1MjAwfQ.invalid-signature"
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	tokenString, err := token.SignedString(privateKey)
+	if err != nil {
+		t.Fatalf("Failed to create test token: %v", err)
+	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -766,5 +802,128 @@ func TestRateLimitMiddlewareWithMetrics_Paths(t *testing.T) {
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("Second request should be blocked, got status %d", w.Code)
+	}
+}
+
+func TestIsPublicPath_NormalizesMissingLeadingSlash(t *testing.T) {
+	// isPublicPath is only ever called with req.URL.Path, which always starts with "/", but the
+	// function guards against a relative path anyway; call it directly to exercise that guard.
+	if !isPublicPath("health") {
+		t.Error("Expected a relative 'health' path to normalize to '/health' and match")
+	}
+}
+
+func TestNewRateLimiter_ClampsNonPositiveRequestsPerMinute(t *testing.T) {
+	rl := NewRateLimiter(0, time.Minute)
+	defer rl.Close()
+
+	if rl.burst != 1 {
+		t.Errorf("Expected non-positive requestsPerMinute to clamp to a burst of 1, got %d", rl.burst)
+	}
+}
+
+func TestNewRateLimiter_CapsBurstForHighRates(t *testing.T) {
+	rl := NewRateLimiter(60, time.Minute)
+	defer rl.Close()
+
+	if rl.burst != 22 {
+		t.Errorf("Expected burst capped to requestsPerMinute/3+2 (22) for rate 60, got %d", rl.burst)
+	}
+}
+
+func TestRateLimiter_EvictionBreaksEarlyWhenOverTenClients(t *testing.T) {
+	rl := NewRateLimiter(100, time.Minute)
+	defer rl.Close()
+	rl.maxClients = 15
+
+	// The 16th client pushes the map to the cap, triggering eviction. evictOldestClients
+	// computes evictCount=10 for 15 existing clients, which is less than the map size, so the
+	// removal loop must break out before visiting every client rather than running to completion.
+	for i := 0; i < 16; i++ {
+		rl.Allow(fmt.Sprintf("client-%d", i))
+	}
+
+	rl.mutex.RLock()
+	count := len(rl.limiters)
+	rl.mutex.RUnlock()
+
+	if count != 6 {
+		t.Errorf("Expected 5 survivors plus the newly added client (6), got %d", count)
+	}
+}
+
+func TestRateLimiter_CleanupTickEvictsOverHalfCapacity(t *testing.T) {
+	rl := NewRateLimiter(100, 20*time.Millisecond)
+	rl.maxClients = 20
+
+	for i := 0; i < 15; i++ {
+		rl.Allow(fmt.Sprintf("client-%d", i))
+	}
+
+	// 15 clients is over half of maxClients (10), so the next cleanup tick evicts down.
+	time.Sleep(60 * time.Millisecond)
+	rl.Close()
+
+	rl.mutex.RLock()
+	count := len(rl.limiters)
+	rl.mutex.RUnlock()
+
+	if count >= 15 {
+		t.Errorf("Expected the cleanup tick to evict clients once over half of maxClients, got %d remaining", count)
+	}
+}
+
+func TestRateLimitMiddleware_EncodeErrorFallsBackToPlainText(t *testing.T) {
+	rl := NewRateLimiter(1, time.Minute)
+	defer rl.Close()
+	middleware := RateLimitMiddleware(rl, nil)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrappedHandler := middleware(handler)
+
+	// Exhaust the burst so the second request is rejected and the middleware tries to write
+	// the rate-limit-exceeded body itself.
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	wrappedHandler.ServeHTTP(httptest.NewRecorder(), req)
+
+	req2 := httptest.NewRequest("GET", "/test", nil)
+	req2.RemoteAddr = "192.168.1.1:12345"
+	w := &failingResponseWriter{}
+
+	wrappedHandler.ServeHTTP(w, req2)
+
+	if len(w.statusCodes) != 2 || w.statusCodes[0] != http.StatusTooManyRequests || w.statusCodes[1] != http.StatusInternalServerError {
+		t.Errorf("Expected status codes [429 500] (rate limit body, then encode-failure fallback), got %v", w.statusCodes)
+	}
+}
+
+func TestWriteJWTError_EncodeErrorFallsBackToPlainText(t *testing.T) {
+	w := &failingResponseWriter{}
+
+	writeJWTError(w, "boom", http.StatusUnauthorized)
+
+	if len(w.statusCodes) != 2 || w.statusCodes[0] != http.StatusUnauthorized || w.statusCodes[1] != http.StatusInternalServerError {
+		t.Errorf("Expected status codes [401 500] (JWT error body, then encode-failure fallback), got %v", w.statusCodes)
+	}
+}
+
+func TestGetClientIPFromRequest_XRealIPOnly(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Real-IP", "10.0.0.5")
+
+	if ip := getClientIPFromRequest(req); ip != "10.0.0.5" {
+		t.Errorf("Expected X-Real-IP to be used when X-Forwarded-For is absent, got %q", ip)
+	}
+}
+
+func TestGetClientIPFromRequest_UnknownWhenNoHeadersOrRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = ""
+
+	if ip := getClientIPFromRequest(req); ip != "unknown" {
+		t.Errorf("Expected 'unknown' when no headers or RemoteAddr are set, got %q", ip)
 	}
 }

@@ -1,13 +1,36 @@
 package handler
 
 import (
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // Use the shared test metrics function
 func getTestMetrics() *Metrics {
 	return NewTestMetrics()
+}
+
+// NewMetrics registers every collector on the default Prometheus registry, so it must run
+// exactly once per test binary; every other test in this package uses NewTestMetrics instead.
+func TestNewMetrics_RegistersAndRecordsRequests(t *testing.T) {
+	metrics := NewMetrics()
+
+	if metrics.RequestsTotal == nil {
+		t.Fatal("RequestsTotal not initialized")
+	}
+	if metrics.RequestDuration == nil {
+		t.Fatal("RequestDuration not initialized")
+	}
+
+	metrics.RecordRequest("GET", "/health", http.StatusOK, 5*time.Millisecond)
+
+	got := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("GET", "/health", "200"))
+	if got != 1 {
+		t.Errorf("Expected RequestsTotal to be 1 after RecordRequest, got %v", got)
+	}
 }
 
 func TestMetrics_RecordRequest(t *testing.T) {
