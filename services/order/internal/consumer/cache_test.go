@@ -28,6 +28,20 @@ func newCacheConsumer(t *testing.T, cache OrderCache) *CacheConsumer {
 	return &CacheConsumer{cache: cache, logger: zaptest.NewLogger(t)}
 }
 
+func TestNewCacheConsumer(t *testing.T) {
+	cache := &fakeOrderCache{}
+	logger := zaptest.NewLogger(t)
+
+	c := NewCacheConsumer(nil, cache, logger)
+
+	if c.cache != cache {
+		t.Errorf("cache = %v, want %v", c.cache, cache)
+	}
+	if c.logger != logger {
+		t.Errorf("logger = %v, want %v", c.logger, logger)
+	}
+}
+
 func TestCacheConsumer_Handle(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -60,6 +74,24 @@ func TestCacheConsumer_Handle(t *testing.T) {
 
 func TestCacheConsumer_Handle_MissingOrderID(t *testing.T) {
 	event := events.Event{ID: uuid.New().String(), Type: events.EventTypeOrderCreated}
+
+	cache := &fakeOrderCache{}
+	c := newCacheConsumer(t, cache)
+
+	if err := c.handle(context.Background(), event); err != nil {
+		t.Fatalf("handle() error = %v", err)
+	}
+	if len(cache.deleted) != 0 {
+		t.Errorf("Delete calls = %v, want none", cache.deleted)
+	}
+}
+
+func TestCacheConsumer_Handle_NonStringOrderID(t *testing.T) {
+	event := events.Event{
+		ID:   uuid.New().String(),
+		Type: events.EventTypeOrderCreated,
+		Data: map[string]interface{}{"order_id": 12345},
+	}
 
 	cache := &fakeOrderCache{}
 	c := newCacheConsumer(t, cache)

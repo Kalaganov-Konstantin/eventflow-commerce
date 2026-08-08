@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,6 +126,39 @@ func TestPaymentClient_Refund(t *testing.T) {
 			t.Errorf("HTTPCode = %v, want %v", appErr.HTTPCode, http.StatusInternalServerError)
 		}
 	})
+
+	t.Run("connection refused", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		srv.Close() // nothing listens on srv.URL after this
+
+		c := NewPaymentClient(srv.URL, time.Second)
+		err := c.Refund(context.Background(), uuid.New(), "downstream_failure")
+
+		var appErr *apperrors.AppError
+		if !stderrors.As(err, &appErr) {
+			t.Fatalf("Refund() error = %v, want *AppError", err)
+		}
+		if appErr.Code != "PAYMENT_SERVICE_UNAVAILABLE" {
+			t.Errorf("Code = %v, want PAYMENT_SERVICE_UNAVAILABLE", appErr.Code)
+		}
+		if appErr.HTTPCode != http.StatusServiceUnavailable {
+			t.Errorf("HTTPCode = %v, want %v", appErr.HTTPCode, http.StatusServiceUnavailable)
+		}
+	})
+}
+
+func TestPaymentClient_Refund_BuildRequestError(t *testing.T) {
+	// A control character in the base URL makes http.NewRequestWithContext fail, which is also
+	// the only way to drive isRetryablePaymentError through its default, non-AppError branch.
+	c := NewPaymentClient("http://\x7f", time.Second)
+
+	err := c.Refund(context.Background(), uuid.New(), "downstream_failure")
+	if err == nil {
+		t.Fatal("expected error, got none")
+	}
+	if !strings.Contains(err.Error(), "build payment request") {
+		t.Errorf("error = %v, want it to mention building the request", err)
+	}
 }
 
 func TestPaymentClient_Refund_CircuitBreakerSkipsBackendWhileOpen(t *testing.T) {
