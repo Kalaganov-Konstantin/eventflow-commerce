@@ -233,6 +233,278 @@ func TestStockRepository_Reserve(t *testing.T) {
 			t.Fatal("expected error, got none")
 		}
 	})
+
+	t.Run("returns error when checking for a duplicate reservation fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when the inventory update fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when reading rows affected of the inventory update fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewErrorResult(errors.New("boom")))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when reading the available quantity fails after insufficient stock", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 5}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery("SELECT quantity_available FROM inventory").
+			WithArgs(item.ProductID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns not found when the product disappears after insufficient stock", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 5}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery("SELECT quantity_available FROM inventory").
+			WithArgs(item.ProductID).
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		err = repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item})
+		var appErr *apperrors.AppError
+		if !errors.As(err, &appErr) || appErr.Code != "PRODUCT_NOT_FOUND" {
+			t.Errorf("error = %v, want PRODUCT_NOT_FOUND", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("rolls back when the reservation is invalid", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 0}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("rolls back when inserting the reservation row fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_reservations").
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("rolls back when inserting the reservation movement fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_reservations").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), item.ProductID, -item.Quantity, orderID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when the transaction fails to commit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		item := domain.ReserveItem{ProductID: uuid.New(), Quantity: 2}
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("SELECT 1 FROM inventory_reservations").
+			WithArgs(orderID, item.ProductID, "reserved").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(item.Quantity, item.ProductID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_reservations").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), item.ProductID, -item.Quantity, orderID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+			WithArgs(sqlmock.AnyArg(), "inventory.events", "inventory.reserved", orderID.String(), sqlmock.AnyArg(), nil).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("boom"))
+
+		repo := NewStockRepository(db)
+		if err := repo.Reserve(context.Background(), orderID, []domain.ReserveItem{item}); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
 }
 
 func TestStockRepository_Release(t *testing.T) {
@@ -321,6 +593,149 @@ func TestStockRepository_Release(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error when a reservation row fails to scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id"}).AddRow(uuid.New()))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when reservation row iteration fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		rows := sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 3).RowError(0, errors.New("boom"))
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(rows)
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when the inventory update fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 3))
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(3, productID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when inserting the release movement fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 3))
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(3, productID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), productID, 3, orderID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when updating the reservation status fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 3))
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(3, productID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), productID, 3, orderID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("UPDATE inventory_reservations SET status").
+			WithArgs("released", orderID, "reserved").
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when the transaction fails to begin", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectBegin().WillReturnError(errors.New("boom"))
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), uuid.New()); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
 	t.Run("rolls back when the outbox insert fails", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -346,6 +761,43 @@ func TestStockRepository_Release(t *testing.T) {
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).WillReturnError(errors.New("boom"))
 		mock.ExpectRollback()
+
+		repo := NewStockRepository(db)
+		if err := repo.Release(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when the transaction fails to commit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 3))
+		mock.ExpectExec("UPDATE inventory").
+			WithArgs(3, productID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), productID, 3, orderID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("UPDATE inventory_reservations SET status").
+			WithArgs("released", orderID, "reserved").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO outbox_messages")).
+			WithArgs(sqlmock.AnyArg(), "inventory.events", "inventory.released", orderID.String(), sqlmock.AnyArg(), nil).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("boom"))
 
 		repo := NewStockRepository(db)
 		if err := repo.Release(context.Background(), orderID); err == nil {
@@ -553,6 +1005,114 @@ func TestStockRepository_CommitInTx(t *testing.T) {
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when decrementing quantity_reserved fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 2))
+		mock.ExpectExec("UPDATE inventory SET quantity_reserved").
+			WithArgs(2, productID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewStockRepository(db)
+		if _, err := repo.CommitInTx(context.Background(), tx, orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+	})
+
+	t.Run("returns error when inserting the sale movement fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 2))
+		mock.ExpectExec("UPDATE inventory SET quantity_reserved").
+			WithArgs(2, productID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), productID, -2, orderID).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewStockRepository(db)
+		if _, err := repo.CommitInTx(context.Background(), tx, orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+	})
+
+	t.Run("returns error when updating the reservation status fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		productID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM inventory_reservations").
+			WithArgs(orderID, "reserved").
+			WillReturnRows(sqlmock.NewRows([]string{"product_id", "quantity"}).AddRow(productID, 2))
+		mock.ExpectExec("UPDATE inventory SET quantity_reserved").
+			WithArgs(2, productID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO inventory_movements").
+			WithArgs(sqlmock.AnyArg(), productID, -2, orderID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("UPDATE inventory_reservations SET status").
+			WithArgs("committed", orderID, "reserved").
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewStockRepository(db)
+		if _, err := repo.CommitInTx(context.Background(), tx, orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
 		}
 	})
 }

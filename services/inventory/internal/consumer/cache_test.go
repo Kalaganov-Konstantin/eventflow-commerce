@@ -30,6 +30,20 @@ func newCacheConsumer(t *testing.T, cache ProductCache) *CacheConsumer {
 	return &CacheConsumer{cache: cache, logger: zaptest.NewLogger(t)}
 }
 
+func TestNewCacheConsumer(t *testing.T) {
+	cache := &fakeProductCache{}
+	logger := zaptest.NewLogger(t)
+
+	c := NewCacheConsumer(nil, cache, logger)
+
+	if c.cache != cache {
+		t.Errorf("cache = %v, want %v", c.cache, cache)
+	}
+	if c.logger != logger {
+		t.Errorf("logger = %v, want %v", c.logger, logger)
+	}
+}
+
 func TestCacheConsumer_Handle(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -91,6 +105,30 @@ func TestCacheConsumer_Handle(t *testing.T) {
 				Data: map[string]interface{}{},
 			},
 			want: nil,
+		},
+		{
+			name: "inventory.reserved with items in an unexpected shape is ignored",
+			event: events.Event{
+				ID:   uuid.New().String(),
+				Type: events.EventTypeInventoryReserved,
+				Data: map[string]interface{}{"order_id": uuid.New().String(), "items": "not-a-list"},
+			},
+			want: nil,
+		},
+		{
+			name: "inventory.reserved skips items that are not objects",
+			event: events.Event{
+				ID:   uuid.New().String(),
+				Type: events.EventTypeInventoryReserved,
+				Data: map[string]interface{}{
+					"order_id": uuid.New().String(),
+					"items": []interface{}{
+						"not-an-object",
+						map[string]interface{}{"product_id": "p1", "quantity": float64(2)},
+					},
+				},
+			},
+			want: []string{"product:p1"},
 		},
 	}
 

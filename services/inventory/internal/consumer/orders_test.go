@@ -58,6 +58,33 @@ func newConsumer(t *testing.T, db *sql.DB, stock StockService) *OrdersConsumer {
 	}
 }
 
+func TestNewOrdersConsumer(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stock := &fakeStockService{}
+	processed := events.NewProcessedStore(db)
+	logger := zaptest.NewLogger(t)
+
+	c := NewOrdersConsumer(nil, db, processed, stock, logger)
+
+	if c.db != db {
+		t.Errorf("db = %v, want %v", c.db, db)
+	}
+	if c.processed != processed {
+		t.Errorf("processed = %v, want %v", c.processed, processed)
+	}
+	if c.stock != stock {
+		t.Errorf("stock = %v, want %v", c.stock, stock)
+	}
+	if c.logger != logger {
+		t.Errorf("logger = %v, want %v", c.logger, logger)
+	}
+}
+
 func TestOrdersConsumer_Handle(t *testing.T) {
 	t.Run("forwards order.cancelled to the stock service", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -158,6 +185,92 @@ func TestOrdersConsumer_Handle(t *testing.T) {
 		}
 		if len(stock.calls) != 0 {
 			t.Errorf("calls = %v, want none", stock.calls)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("drops an event whose order id is not a string", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := events.Event{
+			ID:   uuid.New().String(),
+			Type: events.EventTypeOrderCancelled,
+			Data: map[string]interface{}{"order_id": 12345},
+		}
+
+		stock := &fakeStockService{}
+		c := newConsumer(t, db, stock)
+
+		if err := c.handle(context.Background(), event); err != nil {
+			t.Fatalf("handle() error = %v", err)
+		}
+		if len(stock.calls) != 0 {
+			t.Errorf("calls = %v, want none", stock.calls)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when marking the event processed fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newOrderEvent(events.EventTypeOrderCancelled, uuid.New().String())
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+			WithArgs(event.ID, event.Type).
+			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		stock := &fakeStockService{}
+		c := newConsumer(t, db, stock)
+
+		if err := c.handle(context.Background(), event); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if len(stock.calls) != 0 {
+			t.Errorf("calls = %v, want none", stock.calls)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when the transaction fails to commit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		event := newOrderEvent(events.EventTypeOrderCancelled, orderID.String())
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+			WithArgs(event.ID, event.Type).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("boom"))
+
+		stock := &fakeStockService{}
+		c := newConsumer(t, db, stock)
+
+		if err := c.handle(context.Background(), event); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if len(stock.calls) != 1 || stock.calls[0].orderID != orderID {
+			t.Errorf("calls = %v, want one call for %v", stock.calls, orderID)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)

@@ -73,6 +73,18 @@ func TestLoadConfig(t *testing.T) {
 			errMsg:  "database host is required",
 		},
 		{
+			name: "Unparsable database URL",
+			envVars: map[string]string{
+				"INVENTORY_SERVER_PORT":       "8080",
+				"INVENTORY_DATABASE_URL":      "postgres://%zz",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
+			},
+			wantErr: true,
+			errMsg:  "invalid INVENTORY_DATABASE_URL",
+		},
+		{
 			name: "Missing Redis URL",
 			envVars: map[string]string{
 				"INVENTORY_SERVER_PORT":       "8080",
@@ -106,6 +118,31 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.RedisPoolSize != 50 {
 			t.Errorf("LoadConfig() RedisPoolSize = %v, want 50", cfg.RedisPoolSize)
+		}
+	})
+
+	t.Run("unmarshalable value returns an error", func(t *testing.T) {
+		clearEnvVars()
+		defer clearEnvVars()
+
+		for key, value := range map[string]string{
+			"INVENTORY_SERVER_PORT":                "8080",
+			"INVENTORY_DATABASE_URL":               "postgres://user:pass@localhost:5432/inventory?sslmode=disable",
+			"REDIS_URL":                            "redis://localhost:6379",
+			"KAFKA_BROKERS":                        "localhost:9092",
+			"OTEL_EXPORTER_OTLP_ENDPOINT":          "http://localhost:14268/api/traces",
+			"INVENTORY_DATABASE_POOL_MAX_LIFETIME": "not-a-duration",
+		} {
+			os.Setenv(key, value)
+		}
+		defer os.Unsetenv("INVENTORY_DATABASE_POOL_MAX_LIFETIME")
+
+		_, err := LoadConfig()
+		if err == nil {
+			t.Fatal("LoadConfig() expected error but got none")
+		}
+		if !strings.Contains(err.Error(), "error unmarshaling config") {
+			t.Errorf("LoadConfig() error = %v, want error containing %q", err, "error unmarshaling config")
 		}
 	})
 
@@ -238,6 +275,108 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "INVENTORY_SERVER_PORT (or INVENTORY_SERVICE_PORT) environment variable is not set",
+		},
+		{
+			name: "Missing Kafka brokers",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Jaeger: config.JaegerConfig{
+					Endpoint: "http://localhost:14268/api/traces",
+				},
+			},
+			wantErr: true,
+			errMsg:  "KAFKA_BROKERS environment variable is not set",
+		},
+		{
+			name: "Missing Jaeger endpoint",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka: config.KafkaConfig{
+					Brokers: []string{"localhost:9092"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "OTEL_EXPORTER_OTLP_ENDPOINT environment variable is not set",
+		},
+		{
+			name: "Missing database port",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka: config.KafkaConfig{
+					Brokers: []string{"localhost:9092"},
+				},
+				Jaeger: config.JaegerConfig{
+					Endpoint: "http://localhost:14268/api/traces",
+				},
+				Database: config.DatabaseConfig{
+					Host: "localhost",
+				},
+			},
+			wantErr: true,
+			errMsg:  "database port is required in INVENTORY_DATABASE_URL",
+		},
+		{
+			name: "Missing database user",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka: config.KafkaConfig{
+					Brokers: []string{"localhost:9092"},
+				},
+				Jaeger: config.JaegerConfig{
+					Endpoint: "http://localhost:14268/api/traces",
+				},
+				Database: config.DatabaseConfig{
+					Host: "localhost",
+					Port: "5432",
+				},
+			},
+			wantErr: true,
+			errMsg:  "database user is required in INVENTORY_DATABASE_URL",
+		},
+		{
+			name: "Missing database password",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka: config.KafkaConfig{
+					Brokers: []string{"localhost:9092"},
+				},
+				Jaeger: config.JaegerConfig{
+					Endpoint: "http://localhost:14268/api/traces",
+				},
+				Database: config.DatabaseConfig{
+					Host: "localhost",
+					Port: "5432",
+					User: "user",
+				},
+			},
+			wantErr: true,
+			errMsg:  "database password is required in INVENTORY_DATABASE_URL",
+		},
+		{
+			name: "Missing database name",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka: config.KafkaConfig{
+					Brokers: []string{"localhost:9092"},
+				},
+				Jaeger: config.JaegerConfig{
+					Endpoint: "http://localhost:14268/api/traces",
+				},
+				Database: config.DatabaseConfig{
+					Host:     "localhost",
+					Port:     "5432",
+					User:     "user",
+					Password: "pass",
+				},
+			},
+			wantErr: true,
+			errMsg:  "database name is required in INVENTORY_DATABASE_URL",
 		},
 	}
 
