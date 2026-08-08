@@ -140,6 +140,21 @@ func TestProductRepository_GetBySKU(t *testing.T) {
 			t.Errorf("error = %v, want PRODUCT_NOT_FOUND", err)
 		}
 	})
+
+	t.Run("returns error on query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectQuery("FROM products WHERE sku").WithArgs("WID-1").WillReturnError(errors.New("boom"))
+
+		repo := NewProductRepository(db)
+		if _, err := repo.GetBySKU(context.Background(), "WID-1"); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
 }
 
 func TestProductRepository_List(t *testing.T) {
@@ -199,6 +214,42 @@ func TestProductRepository_List(t *testing.T) {
 		mock.ExpectQuery("FROM products WHERE").
 			WithArgs("", false, 20, 0).
 			WillReturnError(errors.New("boom"))
+
+		repo := NewProductRepository(db)
+		if _, err := repo.List(context.Background(), "", false, 20, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when a row fails to scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		rows := sqlmock.NewRows([]string{"id"}).AddRow("only-one-column")
+		mock.ExpectQuery("FROM products WHERE").
+			WithArgs("", false, 20, 0).
+			WillReturnRows(rows)
+
+		repo := NewProductRepository(db)
+		if _, err := repo.List(context.Background(), "", false, 20, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when row iteration fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		rows := productRow(newTestProduct()).RowError(0, errors.New("boom"))
+		mock.ExpectQuery("FROM products WHERE").
+			WithArgs("", false, 20, 0).
+			WillReturnRows(rows)
 
 		repo := NewProductRepository(db)
 		if _, err := repo.List(context.Background(), "", false, 20, 0); err == nil {
@@ -288,6 +339,21 @@ func TestProductRepository_Update(t *testing.T) {
 		defer func() { _ = db.Close() }()
 
 		mock.ExpectExec("UPDATE products SET").WillReturnError(errors.New("boom"))
+
+		repo := NewProductRepository(db)
+		if err := repo.Update(context.Background(), newTestProduct()); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when rows affected read fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectExec("UPDATE products SET").WillReturnResult(sqlmock.NewErrorResult(errors.New("boom")))
 
 		repo := NewProductRepository(db)
 		if err := repo.Update(context.Background(), newTestProduct()); err == nil {

@@ -9,10 +9,14 @@ import (
 	"testing"
 	"time"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/services/order/internal/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/cache"
 	sharedConfig "github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/config"
+	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/database"
 	"github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go/httpserver"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -160,5 +164,118 @@ func TestServer_StartAndStop(t *testing.T) {
 
 	if err := <-errCh; err != nil && err != http.ErrServerClosed {
 		t.Errorf("Start returned unexpected error: %v", err)
+	}
+}
+
+func TestNew_WithDatabase_RegistersOrderRoutes(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "order", Version: "1.0.0"},
+	}
+	srv := New(Options{
+		Config:  cfg,
+		Logger:  zaptest.NewLogger(t),
+		Metrics: prometheus.NewRegistry(),
+		DB:      &database.DB{DB: db},
+	})
+
+	// customerIDFromHeader rejects the request before it ever reaches the repository, so a bare
+	// database handle with no query expectations is enough to prove the order routes are wired.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+uuidLikeSegment, nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/orders/{id} with no DB wired = %d, want %d (missing X-User-ID)", w.Code, http.StatusUnauthorized)
+	}
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	readyW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(readyW, readyReq)
+	if readyW.Code != http.StatusOK {
+		t.Errorf("/health/ready with a database configured = %d, want %d (body=%s)", readyW.Code, http.StatusOK, readyW.Body.String())
+	}
+}
+
+const uuidLikeSegment = "11111111-1111-1111-1111-111111111111"
+
+func TestNew_WithDatabaseAndRedis_RegistersCacheAndHealthCheck(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	defer func() { _ = redisClient.Close() }()
+
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "order", Version: "1.0.0"},
+	}
+	registry := prometheus.NewRegistry()
+	srv := New(Options{
+		Config:       cfg,
+		Logger:       zaptest.NewLogger(t),
+		Metrics:      registry,
+		DB:           &database.DB{DB: db},
+		Redis:        &database.RedisClient{Client: redisClient},
+		CacheMetrics: cache.NewMetrics(registry),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+uuidLikeSegment, nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/orders/{id} = %d, want %d (missing X-User-ID)", w.Code, http.StatusUnauthorized)
+	}
+
+	// The redis client points at an address nothing listens on, so readiness must report it down.
+	readyReq := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	readyW := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(readyW, readyReq)
+	if readyW.Code != http.StatusServiceUnavailable {
+		t.Errorf("/health/ready with an unreachable redis = %d, want %d (body=%s)", readyW.Code, http.StatusServiceUnavailable, readyW.Body.String())
+	}
+}
+
+func TestNew_DefaultMetricsRegisterer(t *testing.T) {
+	cfg := &config.Config{
+		Server:  sharedConfig.ServerConfig{Host: "127.0.0.1", Port: "0"},
+		Service: sharedConfig.ServiceConfig{Name: "order", Version: "1.0.0"},
+	}
+	srv := New(Options{Config: cfg, Logger: zaptest.NewLogger(t)})
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+}
+
+func TestRoutePath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/health", "/health"},
+		{"/api/v1/orders", "/api/v1/orders"},
+		{"/api/v1/orders/11111111-1111-1111-1111-111111111111", "/api/v1/orders"},
+		{"/api/v1/orders/11111111-1111-1111-1111-111111111111/items", "/api/v1/orders"},
+	}
+
+	for _, tt := range tests {
+		if got := routePath(tt.path); got != tt.want {
+			t.Errorf("routePath(%q) = %q, want %q", tt.path, got, tt.want)
+		}
 	}
 }

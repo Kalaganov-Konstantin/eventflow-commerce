@@ -74,6 +74,24 @@ func TestOrderRepository_Save(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error when the transaction fails to begin", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectBegin().WillReturnError(errors.New("boom"))
+
+		repo := NewOrderRepository(db)
+		if err := repo.Save(context.Background(), newTestOrder()); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("rolls back when order insert fails", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -240,6 +258,75 @@ func TestOrderRepository_GetByID(t *testing.T) {
 			t.Fatal("expected error, got none")
 		}
 	})
+
+	t.Run("returns error when the items query fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		want := newTestOrder()
+		orderRows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
+				want.CreatedAt, want.UpdatedAt, want.Version)
+		mock.ExpectQuery("FROM orders WHERE id").WithArgs(want.ID).WillReturnRows(orderRows)
+		mock.ExpectQuery("FROM order_items WHERE order_id").WithArgs(want.ID).WillReturnError(errors.New("boom"))
+
+		repo := NewOrderRepository(db)
+		if _, err := repo.GetByID(context.Background(), want.ID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when an item fails to scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		want := newTestOrder()
+		orderRows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
+				want.CreatedAt, want.UpdatedAt, want.Version)
+		mock.ExpectQuery("FROM orders WHERE id").WithArgs(want.ID).WillReturnRows(orderRows)
+
+		itemRows := sqlmock.NewRows([]string{"id", "product_id", "product_name", "product_sku", "quantity", "unit_price_cents", "total_price_cents"}).
+			AddRow(want.Items[0].ID.String(), want.Items[0].ProductID.String(), want.Items[0].ProductName,
+				want.Items[0].ProductSKU, "not-a-number", want.Items[0].UnitPriceCents, want.Items[0].TotalPriceCents)
+		mock.ExpectQuery("FROM order_items WHERE order_id").WithArgs(want.ID).WillReturnRows(itemRows)
+
+		repo := NewOrderRepository(db)
+		if _, err := repo.GetByID(context.Background(), want.ID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when iterating items fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		want := newTestOrder()
+		orderRows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
+				want.CreatedAt, want.UpdatedAt, want.Version)
+		mock.ExpectQuery("FROM orders WHERE id").WithArgs(want.ID).WillReturnRows(orderRows)
+
+		itemRows := sqlmock.NewRows([]string{"id", "product_id", "product_name", "product_sku", "quantity", "unit_price_cents", "total_price_cents"}).
+			AddRow(want.Items[0].ID.String(), want.Items[0].ProductID.String(), want.Items[0].ProductName,
+				want.Items[0].ProductSKU, want.Items[0].Quantity, want.Items[0].UnitPriceCents, want.Items[0].TotalPriceCents).
+			RowError(0, errors.New("boom"))
+		mock.ExpectQuery("FROM order_items WHERE order_id").WithArgs(want.ID).WillReturnRows(itemRows)
+
+		repo := NewOrderRepository(db)
+		if _, err := repo.GetByID(context.Background(), want.ID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
 }
 
 func TestOrderRepository_ListByCustomer(t *testing.T) {
@@ -302,6 +389,45 @@ func TestOrderRepository_ListByCustomer(t *testing.T) {
 
 		repo := NewOrderRepository(db)
 		if _, err := repo.ListByCustomer(context.Background(), customerID, 20, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when an order fails to scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		want := newTestOrder()
+		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
+				want.CreatedAt, want.UpdatedAt, "not-a-number")
+		mock.ExpectQuery("FROM orders WHERE customer_id").WithArgs(want.CustomerID, 20, 0).WillReturnRows(rows)
+
+		repo := NewOrderRepository(db)
+		if _, err := repo.ListByCustomer(context.Background(), want.CustomerID, 20, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when iterating orders fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		want := newTestOrder()
+		rows := sqlmock.NewRows([]string{"id", "customer_id", "status", "total_amount_cents", "currency", "created_at", "updated_at", "version"}).
+			AddRow(want.ID.String(), want.CustomerID.String(), string(want.Status), want.TotalAmountCents, want.Currency,
+				want.CreatedAt, want.UpdatedAt, want.Version).
+			RowError(0, errors.New("boom"))
+		mock.ExpectQuery("FROM orders WHERE customer_id").WithArgs(want.CustomerID, 20, 0).WillReturnRows(rows)
+
+		repo := NewOrderRepository(db)
+		if _, err := repo.ListByCustomer(context.Background(), want.CustomerID, 20, 0); err == nil {
 			t.Fatal("expected error, got none")
 		}
 	})
@@ -384,6 +510,34 @@ func TestOrderRepository_UpdateStatus(t *testing.T) {
 		mock.ExpectExec("UPDATE orders SET status").
 			WithArgs(string(domain.StatusConfirmed), id, 1).
 			WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewOrderRepository(db)
+		if err := repo.UpdateStatus(context.Background(), tx, id, domain.StatusConfirmed, 1); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+	})
+
+	t.Run("returns error when reading rows affected fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		id := uuid.New()
+		mock.ExpectBegin()
+		mock.ExpectExec("UPDATE orders SET status").
+			WithArgs(string(domain.StatusConfirmed), id, 1).
+			WillReturnResult(sqlmock.NewErrorResult(errors.New("boom")))
 		mock.ExpectRollback()
 
 		tx, err := db.Begin()

@@ -61,6 +61,33 @@ func newConsumer(t *testing.T, db *sql.DB, orders OrderService) *PaymentsConsume
 	}
 }
 
+func TestNewPaymentsConsumer(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	processed := events.NewProcessedStore(db)
+	orders := &fakeOrderService{}
+	logger := &sharedlogger.Logger{Logger: zaptest.NewLogger(t)}
+
+	c := NewPaymentsConsumer(nil, db, processed, orders, logger)
+
+	if c.db != db {
+		t.Errorf("db = %v, want %v", c.db, db)
+	}
+	if c.processed != processed {
+		t.Errorf("processed = %v, want %v", c.processed, processed)
+	}
+	if c.orders != orders {
+		t.Errorf("orders = %v, want %v", c.orders, orders)
+	}
+	if c.logger != logger {
+		t.Errorf("logger = %v, want %v", c.logger, logger)
+	}
+}
+
 func TestPaymentsConsumer_Handle(t *testing.T) {
 	t.Run("confirms the order on payment.processed", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -246,6 +273,58 @@ func TestPaymentsConsumer_Handle(t *testing.T) {
 
 		if err := c.handle(context.Background(), event); !errors.Is(err, errTestOrderService) {
 			t.Errorf("error = %v, want %v", err, errTestOrderService)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("propagates a failure to mark the event processed", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newPaymentEvent(events.EventTypePaymentProcessed, uuid.New().String())
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+			WithArgs(event.ID, event.Type).
+			WillReturnError(errTestOrderService)
+		mock.ExpectRollback()
+
+		orders := &fakeOrderService{}
+		c := newConsumer(t, db, orders)
+
+		if err := c.handle(context.Background(), event); !errors.Is(err, errTestOrderService) {
+			t.Errorf("error = %v, want %v", err, errTestOrderService)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("wraps a failure to commit the transaction", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newPaymentEvent(events.EventTypePaymentProcessed, uuid.New().String())
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+			WithArgs(event.ID, event.Type).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(errTestOrderService)
+
+		orders := &fakeOrderService{}
+		c := newConsumer(t, db, orders)
+
+		if err := c.handle(context.Background(), event); err == nil {
+			t.Fatal("expected error, got none")
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)

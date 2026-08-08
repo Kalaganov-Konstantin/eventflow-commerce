@@ -46,6 +46,38 @@ func TestSagaRepository_Start(t *testing.T) {
 	}
 }
 
+func TestSagaRepository_Start_ExecFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	orderID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO order_sagas")).
+		WithArgs(orderID, string(saga.StateStarted)).
+		WillReturnError(stderrors.New("boom"))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+
+	repo := NewSagaRepository(db)
+	if err := repo.Start(context.Background(), tx, orderID); err == nil {
+		t.Fatal("expected error, got none")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("tx.Rollback() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestSagaRepository_Transition(t *testing.T) {
 	t.Run("valid transition updates the state", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -148,6 +180,73 @@ func TestSagaRepository_Transition(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error when reading the current state fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT state FROM order_sagas WHERE order_id = $1 FOR UPDATE")).
+			WithArgs(orderID).
+			WillReturnError(stderrors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewSagaRepository(db)
+		if err := repo.Transition(context.Background(), tx, orderID, saga.StateStockReserved); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("returns error when the update fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT state FROM order_sagas WHERE order_id = $1 FOR UPDATE")).
+			WithArgs(orderID).
+			WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(string(saga.StateStarted)))
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE order_sagas SET state = $1 WHERE order_id = $2")).
+			WithArgs(string(saga.StateStockReserved), orderID).
+			WillReturnError(stderrors.New("boom"))
+		mock.ExpectRollback()
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("db.Begin() error = %v", err)
+		}
+
+		repo := NewSagaRepository(db)
+		if err := repo.Transition(context.Background(), tx, orderID, saga.StateStockReserved); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("tx.Rollback() error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("an order with no saga row is not found", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -216,6 +315,39 @@ func TestSagaRepository_SetReservationID(t *testing.T) {
 	}
 }
 
+func TestSagaRepository_SetReservationID_ExecFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	orderID := uuid.New()
+	reservationID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE order_sagas SET reservation_id = $1 WHERE order_id = $2")).
+		WithArgs(reservationID, orderID).
+		WillReturnError(stderrors.New("boom"))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+
+	repo := NewSagaRepository(db)
+	if err := repo.SetReservationID(context.Background(), tx, orderID, reservationID); err == nil {
+		t.Fatal("expected error, got none")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("tx.Rollback() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestSagaRepository_SetPaymentID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -249,6 +381,39 @@ func TestSagaRepository_SetPaymentID(t *testing.T) {
 	}
 }
 
+func TestSagaRepository_SetPaymentID_ExecFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	orderID := uuid.New()
+	paymentID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE order_sagas SET payment_id = $1 WHERE order_id = $2")).
+		WithArgs(paymentID, orderID).
+		WillReturnError(stderrors.New("boom"))
+	mock.ExpectRollback()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+
+	repo := NewSagaRepository(db)
+	if err := repo.SetPaymentID(context.Background(), tx, orderID, paymentID); err == nil {
+		t.Fatal("expected error, got none")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("tx.Rollback() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestSagaRepository_SetLastError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -265,6 +430,28 @@ func TestSagaRepository_SetLastError(t *testing.T) {
 	repo := NewSagaRepository(db)
 	if err := repo.SetLastError(context.Background(), orderID, "release reservation: timed out"); err != nil {
 		t.Fatalf("SetLastError() error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestSagaRepository_SetLastError_ExecFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	orderID := uuid.New()
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE order_sagas SET last_error = $1 WHERE order_id = $2")).
+		WithArgs("release reservation: timed out", orderID).
+		WillReturnError(stderrors.New("boom"))
+
+	repo := NewSagaRepository(db)
+	if err := repo.SetLastError(context.Background(), orderID, "release reservation: timed out"); err == nil {
+		t.Fatal("expected error, got none")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -325,6 +512,24 @@ func TestSagaRepository_Get(t *testing.T) {
 		var appErr *apperrors.AppError
 		if !stderrors.As(err, &appErr) || appErr.Code != "NOT_FOUND" {
 			t.Errorf("error = %v, want NOT_FOUND", err)
+		}
+	})
+
+	t.Run("returns error on query failure", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT order_id, state, reservation_id, payment_id, last_error, created_at, updated_at")).
+			WithArgs(orderID).
+			WillReturnError(stderrors.New("boom"))
+
+		repo := NewSagaRepository(db)
+		if _, err := repo.Get(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
 		}
 	})
 }
