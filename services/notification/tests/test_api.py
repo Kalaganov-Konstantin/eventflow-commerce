@@ -110,6 +110,16 @@ def test_readiness_fails_when_kafka_not_running(client):
     assert response.json()["checks"]["kafka"] is False
 
 
+def test_readiness_fails_when_pool_not_configured(client):
+    app.state.pool = None
+    app.state.consumer = FakeConsumer(running=True)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["database"] is False
+
+
 def test_list_notifications_by_recipient(client, monkeypatch):
     recipient_id = uuid.uuid4()
     notification = make_notification(recipient_id=recipient_id)

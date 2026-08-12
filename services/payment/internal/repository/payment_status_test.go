@@ -179,4 +179,40 @@ func TestPaymentStatusRepository_ListByOrderID(t *testing.T) {
 			t.Fatal("expected error, got none")
 		}
 	})
+
+	t.Run("returns error when a row cannot be scanned", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		rows := sqlmock.NewRows(paymentStatusColumnNames).AddRow(
+			"not-a-uuid", uuid.New(), orderID, 100, "USD", "initiated", "", time.Now(), time.Now(), nil, 1)
+		mock.ExpectQuery("FROM payment_status WHERE order_id").WithArgs(orderID).WillReturnRows(rows)
+
+		repo := NewPaymentStatusRepository(db)
+		if _, err := repo.ListByOrderID(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when iterating rows fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		orderID := uuid.New()
+		want := newTestPaymentStatus()
+		rows := paymentStatusRow(want).RowError(0, errors.New("connection dropped"))
+		mock.ExpectQuery("FROM payment_status WHERE order_id").WithArgs(orderID).WillReturnRows(rows)
+
+		repo := NewPaymentStatusRepository(db)
+		if _, err := repo.ListByOrderID(context.Background(), orderID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
 }

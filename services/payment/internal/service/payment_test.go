@@ -217,6 +217,36 @@ func TestPaymentService_ProcessPayment(t *testing.T) {
 			t.Fatalf("error = %v, want %v", err, errTestRepository)
 		}
 	})
+
+	t.Run("returns error when the gateway approves without a transaction id", func(t *testing.T) {
+		repo := newFakeRepository()
+		gw := &fakeGateway{result: gateway.Result{Approved: true, TransactionID: ""}}
+		svc := NewPaymentService(repo, gw)
+
+		_, err := svc.ProcessPayment(context.Background(), uuid.New(), uuid.New(), 4999, "USD")
+		var appErr *apperrors.AppError
+		if !stderrors.As(err, &appErr) || appErr.Code != "VALIDATION_ERROR" {
+			t.Fatalf("error = %v, want VALIDATION_ERROR", err)
+		}
+		if len(repo.saved) != 0 {
+			t.Errorf("saved = %d payments, want 0", len(repo.saved))
+		}
+	})
+
+	t.Run("returns error when the gateway declines without a decline code", func(t *testing.T) {
+		repo := newFakeRepository()
+		gw := &fakeGateway{result: gateway.Result{Approved: false, DeclineCode: ""}}
+		svc := NewPaymentService(repo, gw)
+
+		_, err := svc.ProcessPayment(context.Background(), uuid.New(), uuid.New(), 4999, "USD")
+		var appErr *apperrors.AppError
+		if !stderrors.As(err, &appErr) || appErr.Code != "VALIDATION_ERROR" {
+			t.Fatalf("error = %v, want VALIDATION_ERROR", err)
+		}
+		if len(repo.saved) != 0 {
+			t.Errorf("saved = %d payments, want 0", len(repo.saved))
+		}
+	})
 }
 
 func TestPaymentService_RefundPayment(t *testing.T) {

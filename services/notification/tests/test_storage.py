@@ -72,6 +72,22 @@ def make_row(**overrides):
 
 
 @pytest.mark.asyncio
+async def test_create_pool_delegates_to_asyncpg(monkeypatch):
+    captured = {}
+
+    async def fake_create_pool(dsn):
+        captured["dsn"] = dsn
+        return "fake-pool"
+
+    monkeypatch.setattr(storage.asyncpg, "create_pool", fake_create_pool)
+
+    result = await storage.create_pool("postgres://example")
+
+    assert result == "fake-pool"
+    assert captured["dsn"] == "postgres://example"
+
+
+@pytest.mark.asyncio
 async def test_create_notification_inserts_and_returns_it():
     row = make_row()
     conn = FakeConnection(fetchrow_result=row)

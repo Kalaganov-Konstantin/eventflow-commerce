@@ -149,4 +149,21 @@ func TestSnapshotStore_LatestSnapshot(t *testing.T) {
 			t.Fatal("expected error, got none")
 		}
 	})
+
+	t.Run("returns error when the stored snapshot is malformed", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		aggregateID := uuid.New()
+		rows := sqlmock.NewRows([]string{"aggregate_version", "snapshot_data"}).AddRow(1, []byte("{not-json"))
+		mock.ExpectQuery("FROM payment_snapshots").WithArgs(aggregateID).WillReturnRows(rows)
+
+		store := NewSnapshotStore(db)
+		if _, err := store.LatestSnapshot(context.Background(), aggregateID); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
 }
