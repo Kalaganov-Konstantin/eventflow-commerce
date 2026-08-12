@@ -13,6 +13,16 @@ import (
 	"github.com/lib/pq"
 )
 
+// unmarshalableEvent is a domain.Event whose JSON encoding always fails, to exercise
+// Append's marshal error branch.
+type unmarshalableEvent struct{}
+
+func (unmarshalableEvent) EventType() string { return "test.unmarshalable" }
+
+func (unmarshalableEvent) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("cannot marshal test event")
+}
+
 func TestStore_Append(t *testing.T) {
 	t.Run("writes events as consecutive versions", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
@@ -80,6 +90,28 @@ func TestStore_Append(t *testing.T) {
 		var appErr *apperrors.AppError
 		if !errors.As(err, &appErr) || appErr.Code != "CONFLICT" {
 			t.Errorf("error = %v, want CONFLICT", err)
+		}
+	})
+
+	t.Run("returns error when an event fails to marshal", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		mock.ExpectBegin()
+
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BeginTx: %v", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		store := NewStore(db)
+		events := []domain.Event{unmarshalableEvent{}}
+		if err := store.Append(context.Background(), tx, uuid.New(), 0, events); err == nil {
+			t.Fatal("expected error, got none")
 		}
 	})
 
@@ -230,6 +262,43 @@ func TestStore_Load(t *testing.T) {
 
 		aggregateID := uuid.New()
 		mock.ExpectQuery("FROM payment_events").WithArgs(aggregateID, 0).WillReturnError(errors.New("boom"))
+
+		store := NewStore(db)
+		if _, err := store.Load(context.Background(), aggregateID, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when a row fails to scan", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		aggregateID := uuid.New()
+		// event_type is NULL, which cannot scan into the non-pointer string destination.
+		rows := sqlmock.NewRows([]string{"event_type", "event_data"}).AddRow(nil, []byte(`{}`))
+		mock.ExpectQuery("FROM payment_events").WithArgs(aggregateID, 0).WillReturnRows(rows)
+
+		store := NewStore(db)
+		if _, err := store.Load(context.Background(), aggregateID, 0); err == nil {
+			t.Fatal("expected error, got none")
+		}
+	})
+
+	t.Run("returns error when iterating rows fails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		aggregateID := uuid.New()
+		rows := sqlmock.NewRows([]string{"event_type", "event_data"}).
+			AddRow(domain.EventTypePaymentInitiated, []byte(`{}`)).
+			RowError(0, errors.New("connection dropped"))
+		mock.ExpectQuery("FROM payment_events").WithArgs(aggregateID, 0).WillReturnRows(rows)
 
 		store := NewStore(db)
 		if _, err := store.Load(context.Background(), aggregateID, 0); err == nil {
