@@ -215,6 +215,78 @@ func TestOrdersConsumer_Handle(t *testing.T) {
 		}
 	})
 
+	t.Run("drops an event missing customer_id", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newOrderReadyEvent(uuid.New(), uuid.New(), 4999, "USD")
+		delete(event.Data, "customer_id")
+
+		payments := &fakePaymentProcessor{}
+		c := newConsumer(t, db, payments)
+
+		if err := c.handle(context.Background(), event); err != nil {
+			t.Fatalf("handle() error = %v", err)
+		}
+		if len(payments.calls) != 0 {
+			t.Errorf("calls = %d, want 0", len(payments.calls))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("drops an event with a non-string order_id", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newOrderReadyEvent(uuid.New(), uuid.New(), 4999, "USD")
+		event.Data["order_id"] = 12345
+
+		payments := &fakePaymentProcessor{}
+		c := newConsumer(t, db, payments)
+
+		if err := c.handle(context.Background(), event); err != nil {
+			t.Fatalf("handle() error = %v", err)
+		}
+		if len(payments.calls) != 0 {
+			t.Errorf("calls = %d, want 0", len(payments.calls))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("drops an event missing currency", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newOrderReadyEvent(uuid.New(), uuid.New(), 4999, "USD")
+		delete(event.Data, "currency")
+
+		payments := &fakePaymentProcessor{}
+		c := newConsumer(t, db, payments)
+
+		if err := c.handle(context.Background(), event); err != nil {
+			t.Fatalf("handle() error = %v", err)
+		}
+		if len(payments.calls) != 0 {
+			t.Errorf("calls = %d, want 0", len(payments.calls))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("drops an event with a non-numeric amount", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -308,6 +380,32 @@ func TestOrdersConsumer_Handle(t *testing.T) {
 		}
 	})
 
+	t.Run("wraps a failure to mark the event processed", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New() error = %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		event := newOrderReadyEvent(uuid.New(), uuid.New(), 4999, "USD")
+		expectWasProcessed(mock, event.ID, false)
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO processed_events")).
+			WithArgs(event.ID, event.Type).
+			WillReturnError(errTestPaymentProcessor)
+		mock.ExpectRollback()
+
+		payments := &fakePaymentProcessor{}
+		c := newConsumer(t, db, payments)
+
+		if err := c.handle(context.Background(), event); err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("wraps a failure to commit the mark-processed transaction", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -333,6 +431,37 @@ func TestOrdersConsumer_Handle(t *testing.T) {
 			t.Errorf("unmet expectations: %v", err)
 		}
 	})
+}
+
+func TestNewOrdersConsumer(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	sub := events.NewSubscriber(events.KafkaConfig{Brokers: []string{"localhost:9092"}}, "orders.events", zaptest.NewLogger(t))
+	processed := events.NewProcessedStore(db)
+	payments := &fakePaymentProcessor{}
+	logger := zaptest.NewLogger(t)
+
+	c := NewOrdersConsumer(sub, db, processed, payments, logger)
+
+	if c.subscriber == nil {
+		t.Error("subscriber not set")
+	}
+	if c.db != db {
+		t.Error("db not set")
+	}
+	if c.processed != processed {
+		t.Error("processed store not set")
+	}
+	if c.payments != payments {
+		t.Error("payment processor not set")
+	}
+	if c.logger != logger {
+		t.Error("logger not set")
+	}
 }
 
 func TestOrdersConsumer_Start(t *testing.T) {

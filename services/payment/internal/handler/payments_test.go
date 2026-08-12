@@ -129,19 +129,21 @@ func TestPaymentsHandler_Process(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		userID     string
-		body       string
-		processor  *fakePaymentProcessor
-		wantStatus int
-		wantCode   string
+		name         string
+		userID       string
+		body         string
+		processor    *fakePaymentProcessor
+		wantStatus   int
+		wantCode     string
+		wantCurrency string
 	}{
 		{
-			name:       "approved payment",
-			userID:     customerID.String(),
-			body:       validBody,
-			processor:  &fakePaymentProcessor{processResult: completed},
-			wantStatus: http.StatusCreated,
+			name:         "approved payment",
+			userID:       customerID.String(),
+			body:         validBody,
+			processor:    &fakePaymentProcessor{processResult: completed},
+			wantStatus:   http.StatusCreated,
+			wantCurrency: "USD",
 		},
 		{
 			name:       "missing X-User-ID header",
@@ -174,6 +176,14 @@ func TestPaymentsHandler_Process(t *testing.T) {
 			processor:  &fakePaymentProcessor{},
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "VALIDATION_ERROR",
+		},
+		{
+			name:         "defaults currency to USD when omitted",
+			userID:       customerID.String(),
+			body:         `{"order_id":"` + orderID.String() + `","amount_cents":4999}`,
+			processor:    &fakePaymentProcessor{processResult: completed},
+			wantStatus:   http.StatusCreated,
+			wantCurrency: "USD",
 		},
 		{
 			name:       "declined by the gateway",
@@ -222,6 +232,9 @@ func TestPaymentsHandler_Process(t *testing.T) {
 				}
 				if tt.processor.lastAmount != 4999 {
 					t.Errorf("service received amount %d, want 4999", tt.processor.lastAmount)
+				}
+				if tt.processor.lastCurrency != tt.wantCurrency {
+					t.Errorf("service received currency %q, want %q", tt.processor.lastCurrency, tt.wantCurrency)
 				}
 				return
 			}
@@ -530,6 +543,13 @@ func TestPaymentsHandler_Events(t *testing.T) {
 			wantStatus:  http.StatusInternalServerError,
 			wantCode:    "INTERNAL_SERVER_ERROR",
 		},
+		{
+			name:        "event history contains an event that cannot be marshalled",
+			paymentID:   paymentID.String(),
+			eventReader: &fakeEventReader{events: []domain.Event{unmarshalableEvent{}}},
+			wantStatus:  http.StatusInternalServerError,
+			wantCode:    "INTERNAL_SERVER_ERROR",
+		},
 	}
 
 	for _, tt := range tests {
@@ -564,5 +584,39 @@ func TestPaymentsHandler_Events(t *testing.T) {
 				t.Errorf("Code = %v, want %v", appErr.Code, tt.wantCode)
 			}
 		})
+	}
+}
+
+// unmarshalableEvent is a domain.Event whose JSON encoding always fails, to exercise the
+// Events handler's marshal error branch.
+type unmarshalableEvent struct{}
+
+func (unmarshalableEvent) EventType() string { return "test.unmarshalable" }
+
+func (unmarshalableEvent) MarshalJSON() ([]byte, error) {
+	return nil, stderrors.New("cannot marshal test event")
+}
+
+// brokenResponseWriter records the status code like httptest.ResponseRecorder but fails every
+// write, to exercise writeJSON's response encoding error branch.
+type brokenResponseWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (w *brokenResponseWriter) Write(_ []byte) (int, error) {
+	return 0, stderrors.New("broken pipe")
+}
+
+func TestPaymentsHandler_WriteJSON_EncodeFailure(t *testing.T) {
+	status := &repository.PaymentStatus{ID: uuid.New(), OrderID: uuid.New(), CustomerID: uuid.New(), Status: "completed"}
+	mux := newTestMuxWithReaders(t, &fakePaymentProcessor{}, &fakePaymentStatusReader{getResult: status}, &fakeEventReader{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/"+status.ID.String(), nil)
+	w := &brokenResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }

@@ -83,6 +83,31 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: true,
 			errMsg:  "REDIS_URL environment variable is not set",
 		},
+		{
+			name: "Unparsable database URL",
+			envVars: map[string]string{
+				"PAYMENT_SERVER_PORT":         "8080",
+				"PAYMENT_DATABASE_URL":        "postgres://user:pass@localhost:notaport/payment",
+				"REDIS_URL":                   "redis://localhost:6379",
+				"KAFKA_BROKERS":               "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:14268/api/traces",
+			},
+			wantErr: true,
+			errMsg:  "invalid PAYMENT_DATABASE_URL",
+		},
+		{
+			name: "Unparsable env value rejected during unmarshal",
+			envVars: map[string]string{
+				"PAYMENT_SERVER_PORT":                "8080",
+				"PAYMENT_DATABASE_URL":               "postgres://user:pass@localhost:5432/payment?sslmode=disable",
+				"REDIS_URL":                          "redis://localhost:6379",
+				"KAFKA_BROKERS":                      "localhost:9092",
+				"OTEL_EXPORTER_OTLP_ENDPOINT":        "http://localhost:14268/api/traces",
+				"PAYMENT_DATABASE_POOL_MAX_LIFETIME": "not-a-duration",
+			},
+			wantErr: true,
+			errMsg:  "error unmarshaling config",
+		},
 	}
 
 	for _, tt := range tests {
@@ -212,6 +237,74 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "PAYMENT_SERVER_PORT (or PAYMENT_SERVICE_PORT) environment variable is not set",
 		},
+		{
+			name: "Missing Kafka brokers",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Jaeger: config.JaegerConfig{Endpoint: "http://localhost:14268/api/traces"},
+			},
+			wantErr: true,
+			errMsg:  "KAFKA_BROKERS environment variable is not set",
+		},
+		{
+			name: "Missing Jaeger endpoint",
+			config: Config{
+				Server: config.ServerConfig{Port: "8080"},
+				Redis:  config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka:  config.KafkaConfig{Brokers: []string{"localhost:9092"}},
+			},
+			wantErr: true,
+			errMsg:  "OTEL_EXPORTER_OTLP_ENDPOINT environment variable is not set",
+		},
+		{
+			name: "Missing database port",
+			config: Config{
+				Server:   config.ServerConfig{Port: "8080"},
+				Database: config.DatabaseConfig{Host: "localhost"},
+				Redis:    config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka:    config.KafkaConfig{Brokers: []string{"localhost:9092"}},
+				Jaeger:   config.JaegerConfig{Endpoint: "http://localhost:14268/api/traces"},
+			},
+			wantErr: true,
+			errMsg:  "database port is required in PAYMENT_DATABASE_URL",
+		},
+		{
+			name: "Missing database user",
+			config: Config{
+				Server:   config.ServerConfig{Port: "8080"},
+				Database: config.DatabaseConfig{Host: "localhost", Port: "5432"},
+				Redis:    config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka:    config.KafkaConfig{Brokers: []string{"localhost:9092"}},
+				Jaeger:   config.JaegerConfig{Endpoint: "http://localhost:14268/api/traces"},
+			},
+			wantErr: true,
+			errMsg:  "database user is required in PAYMENT_DATABASE_URL",
+		},
+		{
+			name: "Missing database password",
+			config: Config{
+				Server:   config.ServerConfig{Port: "8080"},
+				Database: config.DatabaseConfig{Host: "localhost", Port: "5432", User: "user"},
+				Redis:    config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka:    config.KafkaConfig{Brokers: []string{"localhost:9092"}},
+				Jaeger:   config.JaegerConfig{Endpoint: "http://localhost:14268/api/traces"},
+			},
+			wantErr: true,
+			errMsg:  "database password is required in PAYMENT_DATABASE_URL",
+		},
+		{
+			name: "Missing database name",
+			config: Config{
+				Server:   config.ServerConfig{Port: "8080"},
+				Database: config.DatabaseConfig{Host: "localhost", Port: "5432", User: "user", Password: "pass"},
+				Redis:    config.RedisConfig{URL: "redis://localhost:6379"},
+				Kafka:    config.KafkaConfig{Brokers: []string{"localhost:9092"}},
+				Jaeger:   config.JaegerConfig{Endpoint: "http://localhost:14268/api/traces"},
+			},
+			wantErr: true,
+			errMsg:  "database name is required in PAYMENT_DATABASE_URL",
+		},
 	}
 
 	for _, tt := range tests {
@@ -241,6 +334,7 @@ func clearEnvVars() {
 		"KAFKA_BROKERS",
 		"PAYMENT_KAFKA_GROUP_ID",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"PAYMENT_DATABASE_POOL_MAX_LIFETIME",
 	}
 	for _, env := range envVars {
 		os.Unsetenv(env)
