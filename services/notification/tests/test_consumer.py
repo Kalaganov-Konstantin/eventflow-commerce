@@ -5,6 +5,7 @@ import uuid
 import pytest
 
 from notification import consumer as consumer_module
+from notification.config.config import KafkaConfig
 from notification.storage.notifications import Notification
 
 
@@ -78,6 +79,20 @@ class FakeKafkaProducer:
 
     async def send_and_wait(self, topic, value):
         self.sent.append((topic, value))
+
+
+class FakeAsyncIterConsumer(FakeKafkaConsumer):
+    def __init__(self, messages):
+        super().__init__()
+        self._messages = list(messages)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
 
 
 @pytest.mark.asyncio
@@ -339,3 +354,85 @@ async def test_start_and_stop_manage_kafka_clients():
     await instance.stop()
     assert kafka_consumer.stopped is True
     assert kafka_producer.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_build_kafka_consumer_returns_aiokafka_consumer():
+    config = KafkaConfig(brokers="localhost:9092", group_id="notification-service")
+
+    consumer = consumer_module.build_kafka_consumer(config)
+
+    assert isinstance(consumer, consumer_module.AIOKafkaConsumer)
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_build_kafka_producer_returns_aiokafka_producer():
+    config = KafkaConfig(brokers="localhost:9092")
+
+    producer = consumer_module.build_kafka_producer(config)
+
+    assert isinstance(producer, consumer_module.AIOKafkaProducer)
+    await producer.stop()
+
+
+@pytest.mark.asyncio
+async def test_create_consumer_wires_kafka_clients_and_dependencies():
+    config = KafkaConfig(brokers="localhost:9092", group_id="notification-service")
+    pool = object()
+    sender = FakeSender()
+
+    instance = consumer_module.create_consumer(config, pool, sender)
+
+    assert isinstance(instance, consumer_module.Consumer)
+    assert isinstance(instance._consumer, consumer_module.AIOKafkaConsumer)
+    assert isinstance(instance._producer, consumer_module.AIOKafkaProducer)
+    assert instance._pool is pool
+    assert instance._sender is sender
+
+    await instance._consumer.stop()
+    await instance._producer.stop()
+
+
+def test_is_running_false_before_start():
+    instance = consumer_module.Consumer(
+        FakeKafkaConsumer(), FakeKafkaProducer(), object(), FakeSender()
+    )
+
+    assert instance.is_running() is False
+
+
+@pytest.mark.asyncio
+async def test_is_running_true_while_task_active_then_false_after_stop():
+    kafka_consumer = FakeKafkaConsumer()
+    kafka_producer = FakeKafkaProducer()
+    instance = consumer_module.Consumer(kafka_consumer, kafka_producer, object(), FakeSender())
+
+    async def noop_run():
+        await asyncio.sleep(3600)
+
+    instance._run = noop_run
+    await instance.start()
+
+    assert instance.is_running() is True
+
+    await instance.stop()
+    assert instance.is_running() is False
+
+
+@pytest.mark.asyncio
+async def test_run_processes_each_message_from_the_consumer(monkeypatch):
+    processed = []
+
+    async def fake_process(self, message):
+        processed.append(message)
+
+    monkeypatch.setattr(consumer_module.Consumer, "_process", fake_process)
+
+    message = FakeConsumerRecord("orders.events", 0, 1, b"{}")
+    kafka_consumer = FakeAsyncIterConsumer([message, message])
+    instance = consumer_module.Consumer(kafka_consumer, FakeKafkaProducer(), object(), FakeSender())
+
+    await instance._run()
+
+    assert processed == [message, message]

@@ -1,6 +1,6 @@
 import pytest
 
-from notification.config.config import Config
+from notification.config.config import Config, load_config
 
 
 @pytest.fixture
@@ -43,3 +43,13 @@ def test_config_defaults_kafka_and_smtp(env, monkeypatch):
 
     assert config.kafka.group_id == "notification-service"
     assert config.smtp.host == ""
+
+
+def test_load_config_reads_from_environment(env):
+    config = load_config()
+
+    assert config.server.port == 8084
+    assert (
+        config.database.url
+        == "postgres://notifications_user:notifications_pass@localhost:5432/notifications"
+    )
