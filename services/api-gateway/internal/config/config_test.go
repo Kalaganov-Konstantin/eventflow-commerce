@@ -780,18 +780,16 @@ func TestValidateJWTSecret(t *testing.T) {
 func TestLoadConfig(t *testing.T) {
 	// Set required environment variables
 	envVars := map[string]string{
-		"JWT_SECRET":                     "this-is-a-very-long-secret-key-for-jwt-validation",
-		"ORDER_SERVICE_URL":              "http://order:8080",
-		"PAYMENT_SERVICE_URL":            "http://payment:8080",
-		"INVENTORY_SERVICE_URL":          "http://inventory:8080",
-		"NOTIFICATION_SERVICE_URL":       "http://notification:8080",
-		"RATE_LIMIT_REQUESTS_PER_MINUTE": "100",
-		"RATE_LIMIT_WINDOW_DURATION":     "60",
-		"API_GATEWAY_DATABASE_URL":       "postgres://test:test@postgres:5432/test?sslmode=disable",
-		"API_GATEWAY_SERVER_PORT":        "8080",
-		"REDIS_URL":                      "redis:6379",
-		"KAFKA_BROKERS":                  "kafka:9092",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":    "jaeger:14268",
+		"JWT_SECRET":                  "this-is-a-very-long-secret-key-for-jwt-validation",
+		"ORDER_SERVICE_URL":           "http://order:8080",
+		"PAYMENT_SERVICE_URL":         "http://payment:8080",
+		"INVENTORY_SERVICE_URL":       "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL":    "http://notification:8080",
+		"API_GATEWAY_DATABASE_URL":    "postgres://test:test@postgres:5432/test?sslmode=disable",
+		"API_GATEWAY_SERVER_PORT":     "8080",
+		"REDIS_URL":                   "redis:6379",
+		"KAFKA_BROKERS":               "kafka:9092",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:14268",
 	}
 
 	// Set environment variables
@@ -815,12 +813,14 @@ func TestLoadConfig(t *testing.T) {
 		t.Errorf("Expected order service URL %s, got %s", envVars["ORDER_SERVICE_URL"], config.OrderServiceURL)
 	}
 
+	// Nothing in the environment names the rate limit here, so these are the defaults. The
+	// environment variable that does reach it is pinned by TestLoadConfig_RateLimitFromEnv.
 	if config.RateLimit.RequestsPerMinute != 100 {
-		t.Errorf("Expected rate limit requests per minute 100, got %d", config.RateLimit.RequestsPerMinute)
+		t.Errorf("Expected default rate limit requests per minute 100, got %d", config.RateLimit.RequestsPerMinute)
 	}
 
 	if config.RateLimit.WindowDuration != 60 {
-		t.Errorf("Expected rate limit window duration 60, got %d", config.RateLimit.WindowDuration)
+		t.Errorf("Expected default rate limit window duration 60, got %d", config.RateLimit.WindowDuration)
 	}
 
 	if config.Server.Port != "8080" {
@@ -930,13 +930,11 @@ func TestLoadConfig_MissingRequiredEnvVars(t *testing.T) {
 func TestLoadConfig_InvalidEnvValues(t *testing.T) {
 	// Set invalid environment variables
 	envVars := map[string]string{
-		"JWT_SECRET":                     "short", // Too short
-		"ORDER_SERVICE_URL":              "invalid-url",
-		"PAYMENT_SERVICE_URL":            "http://payment:8080",
-		"INVENTORY_SERVICE_URL":          "http://inventory:8080",
-		"NOTIFICATION_SERVICE_URL":       "http://notification:8080",
-		"RATE_LIMIT_REQUESTS_PER_MINUTE": "-1", // Invalid
-		"RATE_LIMIT_WINDOW_DURATION":     "60",
+		"JWT_SECRET":               "short", // Too short
+		"ORDER_SERVICE_URL":        "invalid-url",
+		"PAYMENT_SERVICE_URL":      "http://payment:8080",
+		"INVENTORY_SERVICE_URL":    "http://inventory:8080",
+		"NOTIFICATION_SERVICE_URL": "http://notification:8080",
 	}
 
 	// Set environment variables
