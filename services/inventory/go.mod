@@ -1,6 +1,6 @@
 module github.com/Kalaganov-Konstantin/eventflow-commerce/services/inventory
 
-go 1.25.12
+go 1.25.13
 
 replace github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go => ../../shared/libs/go
 
