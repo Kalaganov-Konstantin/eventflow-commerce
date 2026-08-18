@@ -9,12 +9,19 @@ COMPOSE := $(shell command -v docker-compose >/dev/null 2>&1 && echo docker-comp
 # raises the gateway limit for its own stack instead of weakening the default everywhere.
 PERFORMANCE_RATE_LIMIT_RPM ?= 10000
 
+# The e2e suite runs on the host and reaches the demo stack through its published ports, so its
+# defaults follow `.env` rather than the in-compose addresses. An E2E_* value already set in the
+# environment still wins.
+E2E_GATEWAY_URL ?= http://localhost:$(API_GATEWAY_PORT)
+E2E_NOTIFICATION_URL ?= http://localhost:$(NOTIFICATION_SERVICE_PORT)
+E2E_INVENTORY_DATABASE_URL ?= postgres://inventory_user:inventory_pass@localhost:$(POSTGRES_PORT)/inventory?sslmode=disable
+
 .PHONY: help
 help: ## ✨ Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Available targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # =============================================================================
 # PROJECT COMMANDS
@@ -208,6 +215,8 @@ test-go-integration: ## (internal) Run Go integration tests (tag integration) ag
 		echo "Integration testing $$mod..."; \
 		(cd "$$mod" && go test -tags=integration -race ./test/...) || exit 1; \
 	done
+	@echo "Integration testing shared/libs/go..."
+	@cd shared/libs/go && go test -tags=integration -race ./...
 
 .PHONY: test-python-integration
 test-python-integration: ## (internal) Run Python integration tests (marker integration) against test-deps
@@ -229,7 +238,11 @@ test-integration: ## 🧪 Run integration tests against real postgres, redis and
 .PHONY: test-e2e
 test-e2e: ## 🧪 Run the end to end order flow test against a full demo stack
 	@$(MAKE) demo
-	@cd tests/e2e && JWT_SECRET=$(JWT_SECRET) go test -tags=e2e -race ./...
+	@cd tests/e2e && JWT_SECRET=$(JWT_SECRET) \
+		E2E_GATEWAY_URL=$(E2E_GATEWAY_URL) \
+		E2E_NOTIFICATION_URL=$(E2E_NOTIFICATION_URL) \
+		E2E_INVENTORY_DATABASE_URL="$(E2E_INVENTORY_DATABASE_URL)" \
+		go test -tags=e2e -race ./...
 
 .PHONY: test-performance
 test-performance: ## 🚀 Run the k6 order flow scenario against a full demo stack
