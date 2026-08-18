@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultTestDatabaseURL = "postgres://orders_user:orders_pass@localhost:5433/orders?sslmode=disable"
-	defaultTestKafkaBroker = "localhost:9093"
+	defaultTestKafkaBroker = "localhost:9094"
 
 	testConnectTimeout = 5 * time.Second
 )

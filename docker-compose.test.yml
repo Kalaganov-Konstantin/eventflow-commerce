@@ -47,20 +47,21 @@ services:
       start_period: 20s
 
   # PLAINTEXT is the internal listener other containers on this network would use; HOST is the one
-  # the integration tests running on the host actually connect to, published as 9093.
+  # the integration tests running on the host actually connect to, published as 9094: 9093 is
+  # taken by alertmanager in docker-compose.yml, so the two stacks would otherwise collide.
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     depends_on:
       zookeeper:
         condition: service_healthy
     ports:
-      - "9093:9093"
+      - "9094:9094"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,HOST://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,HOST://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
