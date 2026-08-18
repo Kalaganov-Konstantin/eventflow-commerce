@@ -14,7 +14,7 @@ TEST_DATABASE_URL = os.environ.get(
     "NOTIFICATION_TEST_DATABASE_URL",
     "postgresql://notifications_user:notifications_pass@localhost:5433/notifications",
 )
-TEST_KAFKA_BROKER = os.environ.get("TEST_KAFKA_BROKER", "localhost:9093")
+TEST_KAFKA_BROKER = os.environ.get("TEST_KAFKA_BROKER", "localhost:9094")
 
 # A brand new consumer group starts reading from a topic's current tail, so tests give the
 # consumer this long to join its group before publishing the message it is meant to observe.

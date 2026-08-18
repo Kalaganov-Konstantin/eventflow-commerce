@@ -1,6 +1,6 @@
 module github.com/Kalaganov-Konstantin/eventflow-commerce/services/api-gateway
 
-go 1.25.12
+go 1.25.13
 
 require (
 	github.com/Kalaganov-Konstantin/eventflow-commerce/shared/libs/go v0.0.0-20250722180430-e8b1d0e2cf02

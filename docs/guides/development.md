@@ -68,12 +68,13 @@ in CI: both expect a full `make demo` stack already up, which is heavier and slo
 meant for. Run them locally, or against a staging environment, instead.
 
 `make test-integration` starts its own dependency stack from `docker-compose.test.yml`: postgres on
-port 5433, redis on 6380, kafka reachable on 9093 from the host. These ports are deliberately
+port 5433, redis on 6380, kafka reachable on 9094 from the host. These ports are deliberately
 different from the ones `docker-compose.yml` uses, so the integration stack can run alongside a
 `make demo` stack without colliding with it. The target applies migrations directly with `psql` and
 `yoyo` (not through the `migrate/migrate` containers `make migrate` uses), runs `go test
--tags=integration ./test/...` for order, payment and inventory, then `pytest -m integration` for
-notification, and tears the dependency stack down through a `trap` regardless of the test result.
+-tags=integration ./test/...` for order, payment and inventory plus `./...` for `shared/libs/go`,
+then `pytest -m integration` for notification, and tears the dependency stack down through a `trap`
+regardless of the test result.
 
 ## Running a single test or package
 
