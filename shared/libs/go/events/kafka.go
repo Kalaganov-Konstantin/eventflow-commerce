@@ -287,9 +287,18 @@ func (s *Subscriber) sendToDLQ(ctx context.Context, msg kafka.Message, errorType
 		return false
 	}
 
-	msg.Headers = append(msg.Headers, kafka.Header{Key: "errorType", Value: []byte(errorType)})
+	// Rebuilt rather than reused: Topic, Partition and Offset on a fetched message describe where
+	// it was read from, and kafka-go rejects a write when both the writer and the message name a
+	// topic. Headers are copied so the append never writes into the fetched message's array.
+	dlqMsg := kafka.Message{
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: make([]kafka.Header, 0, len(msg.Headers)+1),
+	}
+	dlqMsg.Headers = append(dlqMsg.Headers, msg.Headers...)
+	dlqMsg.Headers = append(dlqMsg.Headers, kafka.Header{Key: "errorType", Value: []byte(errorType)})
 
-	if err := s.dlqWriter.WriteMessages(ctx, msg); err != nil {
+	if err := s.dlqWriter.WriteMessages(ctx, dlqMsg); err != nil {
 		s.logger.Error("Failed to send message to DLQ", zap.Error(err), zap.ByteString("key", msg.Key))
 		return false
 	}
