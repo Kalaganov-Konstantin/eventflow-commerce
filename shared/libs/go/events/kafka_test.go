@@ -84,8 +84,12 @@ func (f *flakyThenBlockingReader) CommitMessages(_ context.Context, _ ...kafka.M
 
 func (f *flakyThenBlockingReader) Close() error { return nil }
 
-// fakeWriter is a substitute kafkaWriter that either records written messages or fails.
+// fakeWriter is a substitute kafkaWriter that either records written messages or fails. It
+// reproduces kafka.Writer's rule that exactly one of the writer and the message names the topic,
+// so handing a fetched message straight to the DLQ writer fails here just as it does against a
+// real broker.
 type fakeWriter struct {
+	topic   string
 	written []kafka.Message
 	err     error
 }
@@ -93,6 +97,14 @@ type fakeWriter struct {
 func (f *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
 	if f.err != nil {
 		return f.err
+	}
+	for _, msg := range msgs {
+		if f.topic != "" && msg.Topic != "" {
+			return errors.New("kafka.(*Writer): Topic must not be specified for both Writer and Message")
+		}
+		if f.topic == "" && msg.Topic == "" {
+			return errors.New("kafka.(*Writer): Topic must be specified for Writer or Message")
+		}
 	}
 	f.written = append(f.written, msgs...)
 	return nil
@@ -209,7 +221,7 @@ func TestPublisher_Publish_ReturnsMarshalError(t *testing.T) {
 }
 
 func TestSubscriber_ProcessMessage_CommitsAfterHandlerSuccess(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
@@ -221,9 +233,9 @@ func TestSubscriber_ProcessMessage_CommitsAfterHandlerSuccess(t *testing.T) {
 }
 
 func TestSubscriber_ProcessMessage_CommitsAfterSuccessfulDLQWrite(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
 
 	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
@@ -236,10 +248,46 @@ func TestSubscriber_ProcessMessage_CommitsAfterSuccessfulDLQWrite(t *testing.T) 
 	}
 }
 
-func TestSubscriber_ProcessMessage_DoesNotCommitWhenHandlerFailsAndDLQUnavailable(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+// The DLQ writer already names its topic, so the copy handed to it must not carry the source
+// topic, partition or offset it was read from.
+func TestSubscriber_ProcessMessage_DLQCopyDropsSourceCoordinates(t *testing.T) {
+	msg := kafka.Message{
+		Topic:     OrdersTopic,
+		Partition: 2,
+		Offset:    17,
+		Key:       []byte("order-42"),
+		Value:     mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"}),
+		Headers:   []kafka.Header{{Key: "eventType", Value: []byte("order.created")}},
+	}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{err: errors.New("dlq unreachable")}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
+	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
+
+	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
+
+	if len(dlq.written) != 1 {
+		t.Fatalf("DLQ written = %d messages, want 1", len(dlq.written))
+	}
+	written := dlq.written[0]
+	if written.Topic != "" || written.Partition != 0 || written.Offset != 0 {
+		t.Errorf("DLQ message carries source coordinates topic=%q partition=%d offset=%d, want them cleared",
+			written.Topic, written.Partition, written.Offset)
+	}
+	if string(written.Key) != "order-42" || string(written.Value) != string(msg.Value) {
+		t.Errorf("DLQ message key = %q value = %q, want the original payload", written.Key, written.Value)
+	}
+	if len(written.Headers) != 2 || written.Headers[1].Key != "errorType" {
+		t.Errorf("DLQ message headers = %v, want the original header plus errorType", written.Headers)
+	}
+	if len(msg.Headers) != 1 {
+		t.Errorf("fetched message headers = %d, want 1 left untouched", len(msg.Headers))
+	}
+}
+
+func TestSubscriber_ProcessMessage_DoesNotCommitWhenHandlerFailsAndDLQUnavailable(t *testing.T) {
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	reader := &fakeReader{message: msg}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic), err: errors.New("dlq unreachable")}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq}
 
 	sub.processMessage(context.Background(), msg, func(context.Context, Event) error { return errors.New("boom") })
@@ -250,7 +298,7 @@ func TestSubscriber_ProcessMessage_DoesNotCommitWhenHandlerFailsAndDLQUnavailabl
 }
 
 func TestSubscriber_ProcessMessage_DoesNotCommitWhenDLQNotConfigured(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
@@ -262,9 +310,9 @@ func TestSubscriber_ProcessMessage_DoesNotCommitWhenDLQNotConfigured(t *testing.
 }
 
 func TestSubscriber_ProcessMessage_RetriesBeforeGivingUp(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 3, retryBaseDelay: time.Millisecond}
 
 	var calls int
@@ -288,9 +336,9 @@ func TestSubscriber_ProcessMessage_RetriesBeforeGivingUp(t *testing.T) {
 }
 
 func TestSubscriber_ProcessMessage_StopsRetryingWhenContextCancelled(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 3, retryBaseDelay: time.Hour}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -311,7 +359,7 @@ func TestSubscriber_ProcessMessage_StopsRetryingWhenContextCancelled(t *testing.
 }
 
 func TestSubscriber_ProcessMessage_LogsWhenCommitFails(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg, commitErr: errors.New("commit failed")}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
@@ -323,9 +371,9 @@ func TestSubscriber_ProcessMessage_LogsWhenCommitFails(t *testing.T) {
 }
 
 func TestSubscriber_ProcessMessage_SendsToDLQAfterRetriesExhausted(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), dlqWriter: dlq, maxRetries: 2, retryBaseDelay: time.Millisecond}
 
 	var calls int
@@ -384,7 +432,7 @@ func TestPublisher_SetMetrics_WiresPublishObservations(t *testing.T) {
 }
 
 func TestSubscriber_SetMetrics_WiresConsumedObservations(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
 	registry := prometheus.NewRegistry()
 	m := NewKafkaMetrics(registry)
@@ -399,7 +447,7 @@ func TestSubscriber_SetMetrics_WiresConsumedObservations(t *testing.T) {
 }
 
 func TestSubscriber_ProcessMessage_RecordsConsumedMetricOnSuccess(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
 	registry := prometheus.NewRegistry()
 	m := NewKafkaMetrics(registry)
@@ -413,9 +461,9 @@ func TestSubscriber_ProcessMessage_RecordsConsumedMetricOnSuccess(t *testing.T) 
 }
 
 func TestSubscriber_ProcessMessage_RecordsDLQMetricOnHandlerFailure(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	registry := prometheus.NewRegistry()
 	m := NewKafkaMetrics(registry)
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic, dlqWriter: dlq, metrics: m}
@@ -428,9 +476,9 @@ func TestSubscriber_ProcessMessage_RecordsDLQMetricOnHandlerFailure(t *testing.T
 }
 
 func TestSubscriber_ProcessMessage_RecordsDLQMetricWithUnknownTypeOnUnmarshalFailure(t *testing.T) {
-	msg := kafka.Message{Value: []byte("not json")}
+	msg := kafka.Message{Topic: OrdersTopic, Value: []byte("not json")}
 	reader := &fakeReader{message: msg}
-	dlq := &fakeWriter{}
+	dlq := &fakeWriter{topic: DLQTopic(OrdersTopic)}
 	registry := prometheus.NewRegistry()
 	m := NewKafkaMetrics(registry)
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic, dlqWriter: dlq, metrics: m}
@@ -443,7 +491,7 @@ func TestSubscriber_ProcessMessage_RecordsDLQMetricWithUnknownTypeOnUnmarshalFai
 }
 
 func TestSubscriber_ProcessMessage_NoMetricsConfiguredDoesNotPanic(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &fakeReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop(), topic: OrdersTopic}
 
@@ -455,7 +503,7 @@ func TestSubscriber_ProcessMessage_NoMetricsConfiguredDoesNotPanic(t *testing.T)
 }
 
 func TestSubscriber_Subscribe_ProcessesMessagesUntilContextCancelled(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &loopReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
@@ -479,7 +527,7 @@ func TestSubscriber_Subscribe_ProcessesMessagesUntilContextCancelled(t *testing.
 }
 
 func TestSubscriber_Subscribe_ContinuesAfterTransientFetchError(t *testing.T) {
-	msg := kafka.Message{Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
+	msg := kafka.Message{Topic: OrdersTopic, Value: mustMarshalEvent(t, Event{ID: "evt-1", Type: "order.created"})}
 	reader := &flakyThenBlockingReader{message: msg}
 	sub := &Subscriber{reader: reader, logger: zap.NewNop()}
 
