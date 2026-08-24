@@ -2,8 +2,10 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Absolute on purpose: Prometheus resolves a relative rule_files path against its working
+# directory, which is the data volume in the official image, not against the config file.
 rule_files:
-  - "rules/alerts.yml"
+  - "/etc/prometheus/rules/*.yml"
 
 alerting:
   alertmanagers:
