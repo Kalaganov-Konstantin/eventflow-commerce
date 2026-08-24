@@ -43,7 +43,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:${API_GATEWAY_PORT}/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:${API_GATEWAY_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -75,7 +75,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:${ORDER_SERVICE_PORT}/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:${ORDER_SERVICE_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,7 +116,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:${PAYMENT_SERVICE_PORT}/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:${PAYMENT_SERVICE_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -157,7 +157,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:${INVENTORY_SERVICE_PORT}/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:${INVENTORY_SERVICE_PORT}/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -366,6 +366,7 @@ services:
       - "${PROMETHEUS_PORT}:9090"
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./infrastructure/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
 
   grafana:
