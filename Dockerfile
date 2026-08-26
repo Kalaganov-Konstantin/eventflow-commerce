@@ -18,11 +18,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 
 
 
-# Runtime stage
-FROM alpine:latest
-
-# Install curl for health checks and update package index
-RUN apk update && apk upgrade && apk add --no-cache curl ca-certificates tzdata
+# Runtime stage. The tag is pinned and nothing is installed here: an unpinned alpine plus
+# `apk upgrade` rebuilt the image from whatever the mirror served that day, and made the build
+# depend on reaching the alpine CDN. Certificates and timezone data come from the builder, and the
+# health check uses the wget that busybox already provides.
+FROM alpine:3.24
 
 # Copy timezone data and certificates from builder
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
@@ -35,12 +35,12 @@ COPY --from=builder /app/main /main
 ARG PORT
 EXPOSE ${PORT}
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD [ "curl", "-f", "http://localhost:${PORT}/health" ]
-
 # Set environment variable for the application
 ENV PORT=${PORT}
+
+# Health check. Shell form on purpose: the exec form does not expand ${PORT}.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q --spider "http://localhost:${PORT}/health" || exit 1
 
 # Run the binary
 ENTRYPOINT ["/main"]
